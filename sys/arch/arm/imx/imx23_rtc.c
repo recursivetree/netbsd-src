@@ -55,7 +55,7 @@ static void     rtc_reset(struct rtc_softc *);
 
 static rtc_softc_t _sc = NULL;
 
-CFATTACH_DECL3_NEW(rtc,
+CFATTACH_DECL3_NEW(imx23rtc,
         sizeof(struct rtc_softc),
         rtc_match,
         rtc_attach,

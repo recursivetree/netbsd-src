@@ -128,7 +128,7 @@ static struct sdmmc_chip_functions issp_functions = {
 	.card_intr_ack	= issp_card_intr_ack
 };
 
-CFATTACH_DECL3_NEW(ssp,
+CFATTACH_DECL3_NEW(imx23mmc,
 	sizeof(struct issp_softc),
 	issp_match,
 	issp_attach,

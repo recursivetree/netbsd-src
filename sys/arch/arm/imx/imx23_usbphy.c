@@ -52,7 +52,7 @@ static int	usbphy_activate(device_t, enum devact);
 static void     usbphy_reset(struct usbphy_softc *);
 static void     usbphy_init(struct usbphy_softc *);
 
-CFATTACH_DECL3_NEW(usbphy,
+CFATTACH_DECL3_NEW(imx23usbphy,
         sizeof(struct usbphy_softc),
         usbphy_match,
         usbphy_attach,

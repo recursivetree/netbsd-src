@@ -49,7 +49,7 @@ static int	apbdma_match(device_t, cfdata_t, void *);
 static void	apbdma_attach(device_t, device_t, void *);
 static int	apbdma_activate(device_t, enum devact);
 
-CFATTACH_DECL3_NEW(apbdma,
+CFATTACH_DECL3_NEW(imx23apbdma,
 	sizeof(struct apbdma_softc),
 	apbdma_match,
 	apbdma_attach,

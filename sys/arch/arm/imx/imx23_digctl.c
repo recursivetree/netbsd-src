@@ -59,7 +59,7 @@ static u_int digctl_tc_get_timecount(struct timecounter *);
 
 static digctl_softc_t _sc = NULL;
 
-CFATTACH_DECL3_NEW(digctl,
+CFATTACH_DECL3_NEW(imx23digctl,
         sizeof(struct digctl_softc),
         digctl_match,
         digctl_attach,

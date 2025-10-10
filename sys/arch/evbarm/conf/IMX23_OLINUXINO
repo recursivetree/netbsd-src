@@ -25,22 +25,22 @@ imxusbc0	at ahb? addr 0x80080000 size 0x40000 irq -1
 apbh0		at mainbus? base 0x80000000 size 0x40000
 
 # APBH DMA
-apbdma0		at apbh? addr 0x80004000 size 0x2000 irq -1
+imx23apbdma0		at apbh? addr 0x80004000 size 0x2000 irq -1
 
 # Interrupt controller
 imx23icoll0		at apbh? addr 0x80000000 size 0x2000 irq -1
 
 # Synchronous serial port for SD/MMC
-ssp0		at apbh? addr 0x80010000 size 0x2000 irq 15
-sdmmc*		at ssp?
+imx23mmc0		at apbh? addr 0x80010000 size 0x2000 irq 15
+sdmmc*		at imx23mmc?
 ld*		at sdmmc?
 
 # Digital control
-digctl0		at apbh? addr 0x8001C000 size 0x2000 irq -1
+imx23digctl0		at apbh? addr 0x8001C000 size 0x2000 irq -1
 
 # PIN control
-imxpctl0	at apbh? addr 0x80018000 size 0x2000 irq -1
-gpio*           at imxpctl?
+imx23pctl0	at apbh? addr 0x80018000 size 0x2000 irq -1
+gpio*           at imx23pctl?
 
 # APBX bus
 apbx0		at mainbus? base 0x80040000 size 0x40000
@@ -49,7 +49,7 @@ apbx0		at mainbus? base 0x80040000 size 0x40000
 #power0		at apbx? addr 0x80044000 size 0x2000 irq -1
 
 # APBX DMA
-apbdma1		at apbx? addr 0x80024000 size 0x2000 irq -1
+imx23apbdma1		at apbx? addr 0x80024000 size 0x2000 irq -1
 
 # Timers and rotary decoder
 imx23timrot0		at apbx? addr 0x80068020 size 0x20 irq 28
@@ -61,17 +61,17 @@ imx23timrot1		at apbx? addr 0x80068040 size 0x20 irq 29
 plcom0		at apbx? addr 0x80070000 size 0x1000 irq 0
 
 # USB PHY
-usbphy0		at apbx? addr 0x8007C000 size 0x2000 irq -1
+imx23usbphy0		at apbx? addr 0x8007C000 size 0x2000 irq -1
 
 # Clock control
-clkctrl0	at apbx? addr 0x80040000 size 0x2000 irq -1
+imx23clkctrl0	at apbx? addr 0x80040000 size 0x2000 irq -1
 
 # RTC
-rtc0		at apbx? addr 0x8005C000 size 0x2000 irq -1
+imx23rtc0		at apbx? addr 0x8005C000 size 0x2000 irq -1
 
 # Digital filter: Audio I/O
-digfilt0	at apbx? addr 0x80048000 size 0x8000 irq -1
-audio0		at digfilt0
+imx23digfilt0	at apbx? addr 0x80048000 size 0x8000 irq -1
+audio0		at imx23digfilt0
 
 spkr*		at audio?		# PC speaker (synthesized)
 

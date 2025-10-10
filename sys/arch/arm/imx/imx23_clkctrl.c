@@ -54,7 +54,7 @@ static void     clkctrl_init(struct clkctrl_softc *);
 
 static clkctrl_softc_t _sc = NULL;
 
-CFATTACH_DECL3_NEW(clkctrl,
+CFATTACH_DECL3_NEW(imx23clkctrl,
         sizeof(struct clkctrl_softc),
         clkctrl_match,
         clkctrl_attach,

@@ -70,7 +70,7 @@ static	void	imx23_pinctrl_gp_pin_ctl(void *, int, int);
 
 static imx23_pinctrl_softc_t _sc = NULL;
 
-CFATTACH_DECL3_NEW(imx23_pinctrl,
+CFATTACH_DECL3_NEW(imx23pctl,
         sizeof(struct imx23_pinctrl_softc),
         imx23_pinctrl_match,
         imx23_pinctrl_attach,

@@ -36,14 +36,9 @@ attach	imx23icoll at fdt
 file	arch/arm/imx/imx23_icoll.c	imx23icoll
 
 # Synchronous Serial Port (for SD/MMC)
-device	ssp: sdmmcbus
-attach	ssp at apbh
-file	arch/arm/imx/imx23_ssp.c	ssp
-
-# Power control
-#device	power
-#attach	power at apbx
-#file	arch/arm/imx/imx23_power.c	power
+device	imx23mmc: sdmmcbus
+attach	imx23mmc at apbh
+file	arch/arm/imx/imx23_mmc.c	imx23mmc
 
 # PL011 Debug console
 attach	plcom at apbx with imx23plcom
@@ -54,31 +49,30 @@ device	imx23timrot: apbx
 attach	imx23timrot at fdt: fdt_clock
 file	arch/arm/imx/imx23_timrot.c	imx23timrot
 
-
 # APB{H,X} DMA
-device	apbdma
-attach	apbdma at apbh, apbx
-file	arch/arm/imx/imx23_apbdma.c	apbdma
+device	imx23apbdma
+attach	imx23apbdma at apbh, apbx
+file	arch/arm/imx/imx23_apbdma.c	imx23apbdma
 
 # USB PHY
-device	usbphy
-attach	usbphy at apbx
-file	arch/arm/imx/imx23_usbphy.c	usbphy
+device	imx23usbphy
+attach	imx23usbphy at apbx
+file	arch/arm/imx/imx23_usbphy.c	imx23usbphy
 
 # Digital Control
-device	digctl
-attach	digctl at apbh
-file	arch/arm/imx/imx23_digctl.c	digctl
+device	imx23digctl
+attach	imx23digctl at apbh
+file	arch/arm/imx/imx23_digctl.c	imx23digctl
 
 # PIN Control
-device	imxpctl: gpiobus
-attach	imxpctl at apbh with imx23_pinctrl
-file	arch/arm/imx/imx23_pinctrl.c	imx23_pinctrl
+device	imx23pctl: gpiobus
+attach	imx23pctl at apbh
+file	arch/arm/imx/imx23_pinctrl.c	imx23pctl
 
 # Clock Control
-device	clkctrl
-attach	clkctrl at apbx
-file	arch/arm/imx/imx23_clkctrl.c	clkctrl
+device	imx23clkctrl
+attach	imx23clkctrl at apbx
+file	arch/arm/imx/imx23_clkctrl.c	imx23clkctrl
 
 # USB host controller
 device	imxusbc {unit, irq} : bus_space_generic
@@ -90,11 +84,11 @@ attach	ehci at imxusbc with imxehci
 file	arch/arm/imx/imxusb.c		imxehci
 
 # RTC
-device rtc
-attach rtc at apbx
-file arch/arm/imx/imx23_rtc.c		rtc
+device imx23rtc
+attach imx23rtc at apbx
+file arch/arm/imx/imx23_rtc.c		imx23rtc
 
 # Digital filter: Audio I/O
-device digfilt: audiobus
-attach digfilt at apbx with digfilt
-file arch/arm/imx/imx23_digfilt.c	digfilt
+device imx23digfilt: audiobus
+attach imx23digfilt at apbx
+file arch/arm/imx/imx23_digfilt.c	imx23digfilt

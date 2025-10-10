@@ -130,7 +130,7 @@ struct digfilt_softc {
 	uint8_t sc_cmd_index;
 };
 
-CFATTACH_DECL3_NEW(digfilt,
+CFATTACH_DECL3_NEW(imx23digfilt,
 	sizeof(struct digfilt_softc),
 	digfilt_match,
 	digfilt_attach,

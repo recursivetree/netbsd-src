@@ -1,4 +1,4 @@
-/* $NetBSD: imx23-olinuxino.dts,v 1.1 2025/10/09 06:15:16 skrll Exp $ */
+/* $NetBSD$ */
 
 /*-
  * Copyright (c) 2025 The NetBSD Foundation, Inc.
@@ -29,22 +29,60 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../../../external/gpl2/dts/dist/arch/arm/boot/dts/imx23-olinuxino.dts"
+/*
+ * Digctl driver for the iMX23. The digctl contains various things that don't
+ * warrant having their own block.
+ */
 
-/ {
-	aliases {
-		serial2 = &duart;
-	};
+#include <sys/device.h>
 
-	chosen {
-		stdout-path = "serial2:115200n8";
-	};
+#include <dev/fdt/fdtvar.h>
 
-	apb@80000000 {
-		apbh@80000000 {
-			digctl@8001c000 {
-				status = "okay";
-			};
-		};
-	};
+#include <arm/fdt/arm_fdtvar.h>
+#include <arm/imx/imx23var.h>
+#include <arm/imx/imx23_digctlvar.h>
+
+static int imx23digctl_fdt_match(device_t, cfdata_t, void *);
+static void imx23digctl_fdt_attach(device_t, device_t, void *);
+
+CFATTACH_DECL_NEW(imx23digctl_fdt, sizeof(struct digctl_softc),
+		  imx23digctl_fdt_match, imx23digctl_fdt_attach, NULL, NULL);
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-digctl" },
+	DEVICE_COMPAT_EOL
 };
+
+static int
+imx23digctl_fdt_match(device_t parent, cfdata_t cf, void *aux)
+{
+	struct fdt_attach_args * const faa = aux;
+
+	return of_compatible_match(faa->faa_phandle, compat_data);
+}
+
+static void
+imx23digctl_fdt_attach(device_t parent, device_t self, void *aux)
+{
+	struct digctl_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
+
+	sc->sc_dev = self;
+	sc->sc_iot = faa->faa_bst;
+
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
+		return;
+	}
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
+		return;
+	}
+
+	aprint_normal("\n");
+
+	digctl_attach_common(sc);
+}

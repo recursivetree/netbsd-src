@@ -32,6 +32,13 @@
 #ifndef _ARM_IMX_IMX23_DIGCTLVAR_H_
 #define _ARM_IMX_IMX23_DIGCTLVAR_H_
 
+struct digctl_softc {
+	device_t sc_dev;
+	bus_space_tag_t sc_iot;
+	bus_space_handle_t sc_hdl;
+};
+
+void digctl_attach_common(struct digctl_softc *sc);
 void digctl_usb_clkgate(int);
 
 #endif /* !_ARM_IMX_IMX23_DIGCTLVAR_H_ */

@@ -60,7 +60,7 @@ imx23icoll* 		at fdt? pass 1	# imx23 interrupt driver
 imx23timrot* 		at fdt? pass 2		# imx23 timer
 
 # DMA controller
-imx23apbdma* 	at fdt?			# NXP i.MX23 DMA controller
+imx23apbdma* 	at fdt? pass 1			# NXP i.MX23 DMA controller
 
 # general FDT devices
 fclock* 	at fdt? pass 1
@@ -70,6 +70,15 @@ gregulator* 	at fdt? pass 4
 gpiokeys* 	at fdt?
 wskbd* 		at gpiokeys? console ? mux 1
 gpioleds* 	at fdt?
+
+# SDMMC
+imx23mmc* 	at fdt? pass 2			# i.MX23 SD/MMC
+sdmmc* 		at sdmmcbus?
+ld0 		at sdmmc0
+ld1 		at sdmmc1
+ld2 		at sdmmc2
+ld3 		at sdmmc3
+ld* 		at sdmmc?
 
 # Performance monitors
 pseudo-device 	tprof

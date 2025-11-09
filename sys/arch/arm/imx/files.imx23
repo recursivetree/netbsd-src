@@ -43,6 +43,9 @@ device	imx23mmc: sdmmcbus
 attach	imx23mmc at apbh
 file	arch/arm/imx/imx23_mmc.c	imx23mmc
 
+attach	imx23mmc at fdt with imx23mmc_fdt
+file	arch/arm/imx/imx23mmc_fdt.c	imx23mmc_fdt
+
 # PL011 Debug console
 attach	plcom at apbx with imx23plcom
 file	arch/arm/imx/imx23_plcom.c	imx23plcom

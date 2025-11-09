@@ -43,7 +43,8 @@
 
 #include <arm/imx/imx23_apbdmavar.h>
 #include <arm/imx/imx23_icollreg.h>
-#include <arm/imx/imx23_sspreg.h>
+#include <arm/imx/imx23_mmcvar.h>
+#include <arm/imx/imx23_mmcreg.h>
 #include <arm/imx/imx23var.h>
 
 #include <dev/sdmmc/sdmmcchip.h>
@@ -61,25 +62,6 @@
 
 #define DMA_MAXNSEGS ((MAXPHYS / PAGE_SIZE) + 1)
 
-typedef struct issp_softc {
-	device_t sc_dev;
-	apbdma_softc_t sc_dmac;
-	bus_dma_tag_t sc_dmat;
-	bus_dmamap_t sc_dmamp;
-	bus_size_t sc_chnsiz;
-	bus_dma_segment_t sc_ds[1];
-	int sc_rseg;
-	bus_space_handle_t sc_hdl;
-	bus_space_tag_t sc_iot;
-	device_t sc_sdmmc;
-	kmutex_t sc_lock;
-	struct kcondvar sc_intr_cv;
-	unsigned int dma_channel;
-	uint32_t sc_dma_error;
-	uint32_t sc_irq_error;
-	uint8_t sc_state;
-	uint8_t sc_bus_width;
-} *issp_softc_t;
 
 static int	issp_match(device_t, cfdata_t, void *);
 static void	issp_attach(device_t, device_t, void *);
@@ -201,14 +183,12 @@ issp_attach(device_t parent, device_t self, void *aux)
 	struct issp_softc *sc = device_private(self);
 	struct apb_softc *sc_parent = device_private(parent);
 	struct apb_attach_args *aa = aux;
-	struct sdmmcbus_attach_args saa;
 	static int ssp_attached = 0;
-	int error;
-	void *intr;
 
 	sc->sc_dev = self;
 	sc->sc_iot = aa->aa_iot;
 	sc->sc_dmat = aa->aa_dmat;
+	sc->sc_dmac = device_private(sc_parent->dmac);
 
 	/* Test if device instance is already attached. */
 	if (aa->aa_addr == HW_SSP1_BASE && ISSET(ssp_attached, SSP1_ATTACHED)) {
@@ -220,20 +200,42 @@ issp_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	if (aa->aa_addr == HW_SSP1_BASE) {
-		sc->dma_channel = APBH_DMA_CHANNEL_SSP1;
-	}
-	if (aa->aa_addr == HW_SSP2_BASE) {
-		sc->dma_channel = APBH_DMA_CHANNEL_SSP2;
-	}
-
-	/* This driver requires DMA functionality from the bus.
-	 * Parent bus passes handle to the DMA controller instance. */
-	if (sc_parent->dmac == NULL) {
-		aprint_error_dev(sc->sc_dev, "DMA functionality missing\n");
+	/* Map SSP bus space. */
+	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
+			  &sc->sc_hdl)) {
+		aprint_error_dev(sc->sc_dev, "Unable to map SSP bus space\n");
 		return;
 	}
-	sc->sc_dmac = device_private(sc_parent->dmac);
+
+	if(issp_attach_common(sc, aa->aa_addr)) {
+		return;
+	}
+
+	/* Device instance was successfully attached. */
+	if (aa->aa_addr == HW_SSP1_BASE)
+		ssp_attached |= SSP1_ATTACHED;
+	if (aa->aa_addr == HW_SSP2_BASE)
+		ssp_attached |= SSP2_ATTACHED;
+
+	return;
+}
+
+int issp_attach_common(struct issp_softc *sc, bus_addr_t addr){
+	void *intr;
+	int error;
+	struct sdmmcbus_attach_args saa;
+
+	if (sc->sc_dmac == NULL) {
+		aprint_error_dev(sc->sc_dev, "DMA functionality missing\n");
+		return 1;
+	}
+
+	if (addr == HW_SSP1_BASE) {
+		sc->dma_channel = APBH_DMA_CHANNEL_SSP1;
+	}
+	if (addr == HW_SSP2_BASE) {
+		sc->dma_channel = APBH_DMA_CHANNEL_SSP2;
+	}
 
 	/* Initialize lock. */
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SDMMC);
@@ -242,39 +244,40 @@ issp_attach(device_t parent, device_t self, void *aux)
 	cv_init(&sc->sc_intr_cv, "ssp_intr");
 
 	/* Establish interrupt handlers for SSP errors and SSP DMA. */
-	if (aa->aa_addr == HW_SSP1_BASE) {
+	if (addr == HW_SSP1_BASE) {
 		intr = intr_establish(IRQ_SSP1_DMA, IPL_SDMMC, IST_LEVEL,
 		    issp_dma_intr, sc);
 		if (intr == NULL) {
 			aprint_error_dev(sc->sc_dev, "Unable to establish "
 			    "interrupt for SSP1 DMA\n");
-			return;
+			return 1;
 		}
 		intr = intr_establish(IRQ_SSP1_ERROR, IPL_SDMMC, IST_LEVEL,
 		    issp_error_intr, sc);
 		if (intr == NULL) {
 			aprint_error_dev(sc->sc_dev, "Unable to establish "
 			    "interrupt for SSP1 ERROR\n");
-			return;
+			return 1;
 		}
 	}
 
-	if (aa->aa_addr == HW_SSP2_BASE) {
+	if (addr == HW_SSP2_BASE) {
 		intr = intr_establish(IRQ_SSP2_DMA, IPL_SDMMC, IST_LEVEL,
 		    issp_dma_intr, sc);
 		if (intr == NULL) {
 			aprint_error_dev(sc->sc_dev, "Unable to establish "
 			    "interrupt for SSP2 DMA\n");
-			return;
+			return 1;
 		}
 		intr = intr_establish(IRQ_SSP2_ERROR, IPL_SDMMC, IST_LEVEL,
 		    issp_error_intr, sc);
 		if (intr == NULL) {
 			aprint_error_dev(sc->sc_dev, "Unable to establish "
 			    "interrupt for SSP2 ERROR\n");
-			return;
+			return 1;
 		}
 	}
+
 
 	/* Allocate DMA handle. */
 	error = bus_dmamap_create(sc->sc_dmat, MAXPHYS, 1, MAXPHYS,
@@ -282,7 +285,7 @@ issp_attach(device_t parent, device_t self, void *aux)
 	if (error) {
 		aprint_error_dev(sc->sc_dev,
 		    "Unable to allocate DMA handle\n");
-		return;
+		return 1;
 	}
 
 	/* Allocate memory for DMA command chain. */
@@ -292,20 +295,13 @@ issp_attach(device_t parent, device_t self, void *aux)
 	error = bus_dmamem_alloc(sc->sc_dmat, sc->sc_chnsiz, PAGE_SIZE, 0,
 	    sc->sc_ds, 1, &sc->sc_rseg, BUS_DMA_NOWAIT);
 	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to allocate DMA memory\n");
-		return;
+		aprint_error_dev(sc->sc_dev, "Unable to allocate DMA memory\n");
+		return 1;
 	}
 
 	/* Initialize DMA channel. */
 	apbdma_chan_init(sc->sc_dmac, sc->dma_channel);
 
-	/* Map SSP bus space. */
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl)) {
-		aprint_error_dev(sc->sc_dev, "Unable to map SSP bus space\n");
-		return;
-	}
 
 	issp_reset(sc);
 	issp_init(sc);
@@ -320,7 +316,7 @@ issp_attach(device_t parent, device_t self, void *aux)
 	saa.saa_sct	= &issp_functions;
 	saa.saa_spi_sct	= NULL;
 	saa.saa_sch	= sc;
-	saa.saa_dmat	= aa->aa_dmat;
+	saa.saa_dmat	= sc->sc_dmat;
 	saa.saa_clkmin	= SSP_CLK_MIN;
 	saa.saa_clkmax	= SSP_CLK_MAX;
 	saa.saa_caps	= SMC_CAPS_DMA | SMC_CAPS_4BIT_MODE |
@@ -329,16 +325,10 @@ issp_attach(device_t parent, device_t self, void *aux)
 	sc->sc_sdmmc = config_found(sc->sc_dev, &saa, NULL, CFARGS_NONE);
 	if (sc->sc_sdmmc == NULL) {
 		aprint_error_dev(sc->sc_dev, "unable to attach sdmmc\n");
-		return;
+		return 1;
 	}
 
-	/* Device instance was successfully attached. */
-	if (aa->aa_addr == HW_SSP1_BASE)
-		ssp_attached |= SSP1_ATTACHED;
-	if (aa->aa_addr == HW_SSP2_BASE)
-		ssp_attached |= SSP2_ATTACHED;
-
-	return;
+	return 0;
 }
 
 static int
@@ -378,7 +368,7 @@ issp_host_maxblklen(sdmmc_chipset_handle_t sch)
 static int
 issp_card_detect(sdmmc_chipset_handle_t sch)
 {
-	return 1;
+	return 1; /* the olinuxino has no card detection */
 }
 
 static int
@@ -465,6 +455,8 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		return;
 	}
 
+	mutex_enter(&sc->sc_lock);
+
 	/* Map dma_chain to point allocated previously allocated DMA chain. */
 	error = bus_dmamem_map(sc->sc_dmat, sc->sc_ds, 1, sc->sc_chnsiz,
 	    &dma_chain, BUS_DMA_NOWAIT);
@@ -508,16 +500,12 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	sc->sc_dma_error = 0;
 	cmd->c_error = 0;
 
-	mutex_enter(&sc->sc_lock);
-
 	/* Run DMA command chain. */
 	apbdma_run(sc->sc_dmac, sc->dma_channel);
 
 	/* Wait DMA to complete. */
 	while (sc->sc_state == SSP_STATE_DMA)
 		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
-
-	mutex_exit(&sc->sc_lock);
 
 	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, 0, sc->sc_chnsiz,
 	    BUS_DMASYNC_POSTWRITE);
@@ -575,6 +563,7 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 dmamem_unmap:
 	bus_dmamem_unmap(sc->sc_dmat, dma_chain, sc->sc_chnsiz);
 out:
+	mutex_exit(&sc->sc_lock);
 
 	return;
 }

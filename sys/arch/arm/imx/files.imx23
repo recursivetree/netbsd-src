@@ -60,6 +60,9 @@ device	imx23apbdma
 attach	imx23apbdma at apbh, apbx
 file	arch/arm/imx/imx23_apbdma.c	imx23apbdma
 
+attach	imx23apbdma at fdt with imx23apbdma_fdt
+file	arch/arm/imx/imx23apbdma_fdt.c	imx23apbdma_fdt
+
 # USB PHY
 device	imx23usbphy
 attach	imx23usbphy at apbx

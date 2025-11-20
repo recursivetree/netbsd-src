@@ -59,9 +59,6 @@ CFATTACH_DECL3_NEW(imx23apbdma,
 	NULL,
 	0);
 
-static void	apbdma_reset(struct apbdma_softc *);
-static void	apbdma_init(struct apbdma_softc *);
-
 #define DMA_RD(sc, reg)							\
 		bus_space_read_4(sc->sc_iot, sc->sc_ioh, (reg))
 #define DMA_WR(sc, reg, val)						\
@@ -148,7 +145,7 @@ apbdma_activate(device_t self, enum devact act)
  *
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
-static void
+void
 apbdma_reset(struct apbdma_softc *sc)
 {
 	unsigned int loop;
@@ -193,7 +190,7 @@ apbdma_reset(struct apbdma_softc *sc)
 /*
  * Initialize APB{H,X}DMA block.
  */
-static void
+void
 apbdma_init(struct apbdma_softc *sc)
 {
 

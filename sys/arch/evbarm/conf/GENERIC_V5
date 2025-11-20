@@ -59,6 +59,9 @@ imx23icoll* 		at fdt? pass 1	# imx23 interrupt driver
 # Timers
 imx23timrot* 		at fdt? pass 2		# imx23 timer
 
+# DMA controller
+imx23apbdma* 	at fdt?			# NXP i.MX23 DMA controller
+
 # general FDT devices
 fclock* 	at fdt? pass 1
 ffclock* 	at fdt? pass 1

@@ -84,6 +84,9 @@ device	imx23pctl: gpiobus
 attach	imx23pctl at apbh
 file	arch/arm/imx/imx23_pinctrl.c	imx23pctl
 
+attach	imx23pctl at fdt with imx23pctl_fdt
+file	arch/arm/imx/imx23pinctrl_fdt.c	imx23pctl_fdt
+
 # Clock Control
 device	imx23clkctrl
 attach	imx23clkctrl at apbx

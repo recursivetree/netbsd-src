@@ -97,6 +97,9 @@ plcom* 		at fdt?	pass 4		# ARM PL011 UART
 # Various
 imx23digctl* at fdt? pass 1		# i.MX23 digctl block
 
+# USB
+imx23usbphy*	at fdt? pass 1	# i.MX23 usb phy
+
 # Audio
 audio* 		at audiobus?
 

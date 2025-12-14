@@ -37,13 +37,8 @@
 #include <sys/errno.h>
 
 #include <arm/imx/imx23_usbphyreg.h>
+#include <arm/imx/imx23_usbphyvar.h>
 #include <arm/imx/imx23var.h>
-
-typedef struct usbphy_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-} *usbphy_softc_t;
 
 static int	usbphy_match(device_t, cfdata_t, void *);
 static void	usbphy_attach(device_t, device_t, void *);
@@ -87,7 +82,6 @@ usbphy_attach(device_t parent, device_t self, void *aux)
 	struct usbphy_softc *sc = device_private(self);
 	struct apb_attach_args *aa = aux;
 	static int usbphy_attached = 0;
-	uint32_t phy_version;
 
 	sc->sc_dev = self;
 	sc->sc_iot = aa->aa_iot;
@@ -98,11 +92,19 @@ usbphy_attach(device_t parent, device_t self, void *aux)
 	}
 
 	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
+			  &sc->sc_hdl)) {
 		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
 		return;
 	}
+
+	imx23usbphy_attach_common(sc);
+
+	usbphy_attached = 1;
+}
+
+void
+imx23usbphy_attach_common(struct usbphy_softc *sc) {
+	uint32_t phy_version;
 
 	usbphy_reset(sc);
 	usbphy_init(sc);
@@ -111,8 +113,6 @@ usbphy_attach(device_t parent, device_t self, void *aux)
         aprint_normal(": USB PHY v%" __PRIuBIT ".%" __PRIuBIT "\n",
             __SHIFTOUT(phy_version, HW_USBPHY_VERSION_MAJOR),
             __SHIFTOUT(phy_version, HW_USBPHY_VERSION_MINOR));
-
-	usbphy_attached = 1;
 
 	return;
 }

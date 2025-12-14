@@ -71,6 +71,9 @@ device	imx23usbphy
 attach	imx23usbphy at apbx
 file	arch/arm/imx/imx23_usbphy.c	imx23usbphy
 
+attach	imx23usbphy at fdt with imx23usbphy_fdt
+file	arch/arm/imx/imx23usbphy_fdt.c	imx23usbphy_fdt
+
 # Digital Control
 device	imx23digctl
 attach	imx23digctl at apbh

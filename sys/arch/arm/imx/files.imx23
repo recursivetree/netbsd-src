@@ -103,6 +103,9 @@ device	imxusbc {unit, irq} : bus_space_generic
 attach	imxusbc at ahb
 file	arch/arm/imx/imx23_usb.c	imxusbc
 
+attach	imxusbc at fdt with imx23imxusbc_fdt
+file	arch/arm/imx/imx23usbc_fdt.c	imx23imxusbc_fdt
+
 # EHCI
 attach	ehci at imxusbc with imxehci
 file	arch/arm/imx/imxusb.c		imxehci

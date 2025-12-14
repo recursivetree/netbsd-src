@@ -16,6 +16,10 @@ options 	SOC_IMX23
 #options 	LOCKDEBUG
 #options 	UVMHIST		# kernhist for uvm/pmap subsystems
 
+# These options enable verbose messages for several subsystems.
+# Warning, these may compile large string tables into the kernel!
+options 	USBVERBOSE	# verbose USB device autoconfig messages
+
 # Heartbeat checks
 options 	HEARTBEAT
 options 	HEARTBEAT_MAX_PERIOD_DEFAULT=15
@@ -87,7 +91,7 @@ ld* 		at sdmmc?
 pseudo-device 	tprof
 
 # GPIOs
-imx23pctl* 	at fdt?			# imx23 pin control+gpio
+imx23pctl* 	at fdt?	pass 1		# imx23 pin control+gpio
 gpio* 		at gpiobus?
 
 # UART
@@ -97,8 +101,25 @@ plcom* 		at fdt?	pass 4		# ARM PL011 UART
 # Various
 imx23digctl* at fdt? pass 1		# i.MX23 digctl block
 
+# I2C - not yet supported, but needed to avoid build errors
+iicmux* 	at fdt? pass 5		# I2C mux virtual controllers
+iic* 		at i2cbus?
+
 # USB
 imx23usbphy*	at fdt? pass 1	# i.MX23 usb phy
+
+imxusbc* 	at fdt? pass 3 # i.MX23 usb controller
+
+ehci0		at imxusbc0 unit 0 irq 11
+
+usb*		at ehci?
+uhub*		at usb?
+uhub*		at uhub? port ?
+ugen*		at uhub? port ?
+
+include "dev/usb/usbdevices.config"
+
+midi*		at midibus?
 
 # Audio
 audio* 		at audiobus?

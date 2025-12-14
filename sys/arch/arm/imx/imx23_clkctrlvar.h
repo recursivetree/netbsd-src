@@ -32,6 +32,13 @@
 #ifndef _ARM_IMX_IMX23_CLKCTRLVAR_H_
 #define _ARM_IMX_IMX23_CLKCTRLVAR_H_
 
+struct clkctrl_softc {
+	device_t sc_dev;
+	bus_space_tag_t sc_iot;
+	bus_space_handle_t sc_hdl;
+};
+
+void clkctrl_attach_common(struct clkctrl_softc *);
 void clkctrl_en_usb(void);
 void clkctrl_en_filtclk(void);
 

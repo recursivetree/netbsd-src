@@ -92,6 +92,9 @@ device	imx23clkctrl
 attach	imx23clkctrl at apbx
 file	arch/arm/imx/imx23_clkctrl.c	imx23clkctrl
 
+attach	imx23clkctrl at fdt with imx23clkctrl_fdt
+file	arch/arm/imx/imx23clkctrl_fdt.c	imx23clkctrl_fdt
+
 # USB host controller
 device	imxusbc {unit, irq} : bus_space_generic
 attach	imxusbc at ahb

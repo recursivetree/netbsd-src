@@ -40,19 +40,13 @@
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct clkctrl_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-} *clkctrl_softc_t;
-
 static int	clkctrl_match(device_t, cfdata_t, void *);
 static void	clkctrl_attach(device_t, device_t, void *);
 static int	clkctrl_activate(device_t, enum devact);
 
 static void     clkctrl_init(struct clkctrl_softc *);
 
-static clkctrl_softc_t _sc = NULL;
+static struct clkctrl_softc *_sc = NULL;
 
 CFATTACH_DECL3_NEW(imx23clkctrl,
         sizeof(struct clkctrl_softc),
@@ -100,18 +94,21 @@ clkctrl_attach(device_t parent, device_t self, void *aux)
 	}
 
 	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
+			  &sc->sc_hdl)) {
 		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
 		return;
 	}
 
-
-	clkctrl_init(sc);
+	clkctrl_attach_common(sc);
 
 	aprint_normal("\n");
 
 	clkctrl_attached = 1;
+}
+void
+clkctrl_attach_common(struct clkctrl_softc *sc) {
+
+	clkctrl_init(sc);
 
 	return;
 }

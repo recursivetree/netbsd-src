@@ -40,6 +40,8 @@
 #include <arm/fdt/arm_fdtvar.h>
 #include <arm/imx/imx23var.h>
 #include <arm/imx/imx23_usbvar.h>
+#include <arm/imx/imx23_clkctrlvar.h>
+#include <arm/imx/imx23_digctlvar.h>
 
 static int imx23usbc_fdt_match(device_t, cfdata_t, void *);
 static void imx23usbc_fdt_attach(device_t, device_t, void *);
@@ -80,6 +82,21 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 		aprint_error(": couldn't map registers\n");
 		return;
 	}
+
+	/* Enable PLL outputs for USB PHY. */
+	clkctrl_en_usb();
+
+	/* Enable external USB chip. */
+	struct fdtbus_regulator *vbus_reg =
+	    fdtbus_regulator_acquire(phandle, "vbus-supply");
+	if(vbus_reg == NULL){
+		aprint_error(": couldn't get vbus regulator\n");
+		return;
+	}
+	fdtbus_regulator_enable(vbus_reg);
+
+	/* USB clock on. */
+	digctl_usb_clkgate(0);
 
 	imx23_usb_attach_common(&sc->sc_imxusbc, self);
 }

@@ -100,6 +100,15 @@ imx23_usb_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
+	/* Enable PLL outputs for USB PHY. */
+	clkctrl_en_usb();
+
+	/* Enable external USB chip. */
+	imx23_pinctrl_en_usb();
+
+	/* USB clock on. */
+	digctl_usb_clkgate(0);
+
 	imx23_usb_attach_common(sc, self);
 }
 
@@ -110,15 +119,6 @@ void imx23_usb_attach_common(struct imxusbc_softc *sc, device_t self) {
 	sc->sc_init_md_hook = imx23_usb_init;
 	sc->sc_intr_establish_md_hook = NULL;
 	sc->sc_setup_md_hook = NULL;
-
-	/* Enable PLL outputs for USB PHY. */
-	clkctrl_en_usb();
-
-	/* Enable external USB chip. */
-	imx23_pinctrl_en_usb();
-
-	/* USB clock on. */
-	digctl_usb_clkgate(0);
 
 	aprint_normal("\n");
 

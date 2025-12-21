@@ -35,6 +35,7 @@
 
 #include <sys/device.h>
 
+#include <dev/clk/clk_backend.h>
 #include <dev/fdt/fdtvar.h>
 
 #include <arm/fdt/arm_fdtvar.h>
@@ -44,6 +45,8 @@
 static int imx23clkctrl_fdt_match(device_t, cfdata_t, void *);
 static void imx23clkctrl_fdt_attach(device_t, device_t, void *);
 
+static struct clk *imx23_clockctrl_decode(device_t, int, const void *, size_t);
+
 CFATTACH_DECL_NEW(imx23clkctrl_fdt, sizeof(struct clkctrl_softc),
 		  imx23clkctrl_fdt_match, imx23clkctrl_fdt_attach, NULL, NULL);
 
@@ -52,6 +55,32 @@ static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "fsl,clkctrl" },
 	DEVICE_COMPAT_EOL
 };
+
+struct fdtbus_clock_controller_func imx23_clockctrl_fdt_funcs = {
+	.decode = imx23_clockctrl_decode,
+};
+
+static struct clk *
+imx23_clockctrl_decode(device_t dev, int phandle, const void *data, size_t len)
+{
+	struct clkctrl_softc * const sc = device_private(dev);
+	const u_int *cells = data;
+
+	if(len != sizeof(u_int)) {
+		return NULL;
+	}
+
+	/* See the device tree docs for the full mapping */
+	uint32_t clk_num = be32toh(cells[0]);
+	switch (clk_num) {
+	case 40:
+		return &sc->sc_clks[IMX23_USB_CLK].clk;
+	case 41:
+		return &sc->sc_clks[IMX23_USBPHY_CLK].clk;
+	default:
+		return NULL;
+	}
+}
 
 static int
 imx23clkctrl_fdt_match(device_t parent, cfdata_t cf, void *aux)
@@ -71,6 +100,7 @@ imx23clkctrl_fdt_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_iot = faa->faa_bst;
 
+	/* Map the clkctrl block */
 	bus_addr_t addr;
 	bus_size_t size;
 	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
@@ -85,4 +115,7 @@ imx23clkctrl_fdt_attach(device_t parent, device_t self, void *aux)
 	aprint_normal("\n");
 
 	clkctrl_attach_common(sc);
+
+	fdtbus_register_clock_controller(self, phandle,
+					 &imx23_clockctrl_fdt_funcs);
 }

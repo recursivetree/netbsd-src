@@ -83,9 +83,6 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	/* Enable PLL outputs for USB PHY. */
-	clkctrl_en_usb();
-
 	/* Enable external USB chip. */
 	struct fdtbus_regulator *vbus_reg =
 	    fdtbus_regulator_acquire(phandle, "vbus-supply");
@@ -96,7 +93,8 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 	fdtbus_regulator_enable(vbus_reg);
 
 	/* USB clock on. */
-	digctl_usb_clkgate(0);
+	struct clk *usb_clk = fdtbus_clock_get_index(phandle, 0);
+	clk_enable(usb_clk);
 
 	imx23_usb_attach_common(&sc->sc_imxusbc, self);
 }

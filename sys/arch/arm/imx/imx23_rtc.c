@@ -40,12 +40,6 @@
 #include <arm/imx/imx23_rtcvar.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct rtc_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-} *rtc_softc_t;
-
 static int	rtc_match(device_t, cfdata_t, void *);
 static void	rtc_attach(device_t, device_t, void *);
 static int	rtc_activate(device_t, enum devact);
@@ -53,7 +47,7 @@ static int	rtc_activate(device_t, enum devact);
 static void     rtc_init(struct rtc_softc *);
 static void     rtc_reset(struct rtc_softc *);
 
-static rtc_softc_t _sc = NULL;
+static struct rtc_softc *_sc = NULL;
 
 CFATTACH_DECL3_NEW(imx23rtc,
         sizeof(struct rtc_softc),
@@ -101,19 +95,24 @@ rtc_attach(device_t parent, device_t self, void *aux)
 	}
 
 	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
+			  &sc->sc_hdl)) {
 		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
 		return;
 	}
 
-
-	rtc_init(sc);
-	rtc_reset(sc);
+	rtc_attach_common(sc);
 
 	aprint_normal("\n");
 
 	rtc_attached = 1;
+}
+
+void
+rtc_attach_common(struct rtc_softc *sc)
+{
+
+	rtc_init(sc);
+	rtc_reset(sc);
 
 	return;
 }

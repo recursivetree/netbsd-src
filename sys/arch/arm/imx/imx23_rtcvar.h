@@ -32,6 +32,13 @@
 #ifndef _ARM_IMX_IMX23_RTCVAR_H_
 #define _ARM_IMX_IMX23_RTCVAR_H_
 
+struct rtc_softc {
+	device_t sc_dev;
+	bus_space_tag_t sc_iot;
+	bus_space_handle_t sc_hdl;
+};
+
+void rtc_attach_common(struct rtc_softc *);
 void rtc_release_gnd(int);
 
 #endif /* !_ARM_IMX_IMX23_RTCVAR_H_ */

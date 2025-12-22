@@ -46,5 +46,12 @@
 				status = "okay";
 			};
 		};
+
+		apbx@80040000 {
+			audio-out@80048000 {
+				compatible = "fsl,imx23-audioout";
+				status = "okay";
+			};
+		};
 	};
 };

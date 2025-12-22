@@ -32,4 +32,34 @@
 #ifndef _ARM_IMX_IMX23_AUDIOOUTVAR_H_
 #define _ARM_IMX_IMX23_AUDIOOUTVAR_H_
 
+#include <arm/imx/imx23_apbdmavar.h>
+
+#define DIGFILT_DMA_NSEGS 1
+
+struct digfilt_softc {
+	device_t sc_dev;
+	device_t sc_audiodev;
+	struct audio_format sc_format;
+	bus_space_handle_t sc_aohdl;
+	apbdma_softc_t sc_dmac;
+	bus_dma_tag_t sc_dmat;
+	bus_dmamap_t sc_dmamp;
+	bus_dmamap_t sc_c_dmamp;
+	bus_dma_segment_t sc_ds[DIGFILT_DMA_NSEGS];
+	bus_dma_segment_t sc_c_ds[DIGFILT_DMA_NSEGS];
+	bus_space_handle_t sc_hdl;
+	kmutex_t sc_intr_lock;
+	bus_space_tag_t	sc_iot;
+	kmutex_t sc_lock;
+	audio_params_t sc_pparam;
+	void *sc_buffer;
+	void *sc_dmachain;
+	void *sc_intarg;
+	void (*sc_intr)(void*);
+	uint8_t sc_mute;
+	uint8_t sc_cmd_index;
+};
+
+void digfilt_attach_common(struct digfilt_softc *,  device_t);
+
 #endif /* !_ARM_IMX_IMX23_AUDIOOUTVAR_H_ */

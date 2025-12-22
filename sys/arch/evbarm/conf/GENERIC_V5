@@ -123,6 +123,7 @@ include "dev/usb/usbdevices.config"
 midi*		at midibus?
 
 # Audio
+imx23digfilt* at fdt? pass 6 # i.MX23 audio output
 audio* 		at audiobus?
 
 # MII/PHY support

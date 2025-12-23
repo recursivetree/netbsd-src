@@ -51,6 +51,8 @@
 #define APBDMA_CMD_CHAIN		__BIT(2)
 #define APBDMA_CMD_COMMAND		__BITS(1, 0)
 
+#define ABPDMA_CMD_XFER_MAX_BYTES 	65535	/* 16 bits */
+
 /* DMA command types. */
 #define APBDMA_CMD_NO_DMA_XFER		0
 #define APBDMA_CMD_DMA_WRITE		1

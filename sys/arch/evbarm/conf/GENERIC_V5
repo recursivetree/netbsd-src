@@ -111,7 +111,7 @@ imx23usbphy*	at fdt? pass 2	# i.MX23 usb phy
 
 imxusbc* 	at fdt? pass 6 # i.MX23 usb controller
 
-ehci0		at imxusbc0 unit 0 irq 11
+ehci* 		at imxusbc?
 
 usb*		at ehci?
 uhub*		at usb?

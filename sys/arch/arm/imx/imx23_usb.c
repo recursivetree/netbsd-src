@@ -50,10 +50,13 @@
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23_digctlvar.h>
 #include <arm/imx/imx23_pinctrlvar.h>
-#include <arm/imx/imx23_usbvar.h>
 #include <arm/imx/imx23var.h>
 
 #include "locators.h"
+
+struct imx23_usb_softc {
+	struct imxusbc_softc  sc_imxusbc; /* Must be first */
+};
 
 static int	imx23_usb_match(device_t, cfdata_t, void *);
 static void	imx23_usb_attach(device_t, device_t, void *);
@@ -94,6 +97,12 @@ imx23_usb_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 	sc->sc_iot = &imx23_bus_space;
+	sc->sc_ehci_size = IMXUSB_EHCI_SIZE;
+	sc->sc_ehci_offset = IMXUSB_EHCI_SIZE;
+
+	sc->sc_init_md_hook = imx23_usb_init;
+	sc->sc_intr_establish_md_hook = NULL;
+	sc->sc_setup_md_hook = NULL;
 
 	if (bus_space_map(sc->sc_iot, AHB_USB, AHB_USB_SIZE, 0, &sc->sc_ioh)) {
 		aprint_error_dev(sc->sc_dev, "Unable to map bus space");
@@ -109,24 +118,11 @@ imx23_usb_attach(device_t parent, device_t self, void *aux)
 	/* USB clock on. */
 	clkctrl_en_usbc_clkgate(0);
 
-	imx23_usb_attach_common(sc, self);
-}
-
-void imx23_usb_attach_common(struct imxusbc_softc *sc, device_t self) {
-
-	sc->sc_ehci_size = IMXUSB_EHCI_SIZE;
-	sc->sc_ehci_offset = IMXUSB_EHCI_SIZE;
-	sc->sc_init_md_hook = imx23_usb_init;
-	sc->sc_intr_establish_md_hook = NULL;
-	sc->sc_setup_md_hook = NULL;
-
 	aprint_normal("\n");
 
 	/* attach OTG/EHCI host controllers */
 	config_search(self, NULL,
 	    CFARGS(.search = imxusbc_search));
-
-	return;
 }
 
 static int

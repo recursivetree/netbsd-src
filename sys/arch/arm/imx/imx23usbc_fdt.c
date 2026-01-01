@@ -37,16 +37,33 @@
 
 #include <dev/fdt/fdtvar.h>
 
+#include <dev/usb/usb.h>
+#include <dev/usb/usbdi.h>
+#include <dev/usb/usbdivar.h>
+#include <dev/usb/usb_mem.h>
+
+#include <dev/usb/ehcireg.h>
+#include <dev/usb/ehcivar.h>
+
 #include <arm/fdt/arm_fdtvar.h>
+#include <arm/imx/imxusbvar.h>
+#include <arm/imx/imxusbreg.h>
 #include <arm/imx/imx23var.h>
-#include <arm/imx/imx23_usbvar.h>
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23_digctlvar.h>
+
+struct imxusbc_fdt_softc {
+	struct imxusbc_softc sc_imxusbc; /* Must be first */
+	int sc_phandle;
+};
 
 static int imx23usbc_fdt_match(device_t, cfdata_t, void *);
 static void imx23usbc_fdt_attach(device_t, device_t, void *);
 
-CFATTACH_DECL_NEW(imx23imxusbc_fdt, sizeof(struct imx23_usb_softc),
+static void imx23usbc_fdt_init(struct imxehci_softc *, uintptr_t);
+static void * imx23usbc_fdt_intr_establish(struct imxehci_softc *, uintptr_t);
+
+CFATTACH_DECL_NEW(imx23imxusbc_fdt, sizeof(struct imxusbc_fdt_softc),
 		  imx23usbc_fdt_match, imx23usbc_fdt_attach, NULL, NULL);
 
 static const struct device_compatible_entry compat_data[] = {
@@ -65,9 +82,11 @@ imx23usbc_fdt_match(device_t parent, cfdata_t cf, void *aux)
 static void
 imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 {
-	struct imx23_usb_softc * const sc = device_private(self);
+	struct imxusbc_fdt_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
+
+	sc->sc_phandle = phandle;
 
 	sc->sc_imxusbc.sc_dev = self;
 	sc->sc_imxusbc.sc_iot = faa->faa_bst;
@@ -96,5 +115,49 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 	struct clk *usb_clk = fdtbus_clock_get_index(phandle, 0);
 	clk_enable(usb_clk);
 
-	imx23_usb_attach_common(&sc->sc_imxusbc, self);
+	sc->sc_imxusbc.sc_ehci_size = IMXUSB_EHCI_SIZE;
+	sc->sc_imxusbc.sc_ehci_offset = IMXUSB_EHCI_SIZE;
+	sc->sc_imxusbc.sc_init_md_hook = imx23usbc_fdt_init;
+	sc->sc_imxusbc.sc_intr_establish_md_hook = imx23usbc_fdt_intr_establish;
+	sc->sc_imxusbc.sc_setup_md_hook = NULL;
+
+	/* attach OTG/EHCI host controllers */
+	struct imxusbc_attach_args iaa;
+	iaa.aa_iot = sc->sc_imxusbc.sc_iot;
+	iaa.aa_ioh = sc->sc_imxusbc.sc_ioh;
+	iaa.aa_dmat = faa->faa_dmat;
+	iaa.aa_unit = 0; /* only one unit on the imx23 */
+	iaa.aa_irq = -1; /* we establish it directly from FDT in the hook */
+	config_found(self, &iaa, NULL, CFARGS_NONE);
+}
+
+static void
+imx23usbc_fdt_init(struct imxehci_softc *sc, uintptr_t data)
+{
+	sc->sc_iftype = IMXUSBC_IF_UTMI;
+}
+
+static void *
+imx23usbc_fdt_intr_establish(struct imxehci_softc *sc, uintptr_t data)
+{
+	struct imxusbc_fdt_softc *ifsc = (struct imxusbc_fdt_softc *)
+					     sc->sc_usbc;
+	ehci_softc_t *hsc = &sc->sc_hsc;
+	void *ih;
+
+	char intrstr[128];
+	if (!fdtbus_intr_str(ifsc->sc_phandle, 0, intrstr, sizeof(intrstr))) {
+		aprint_error_dev(sc->sc_dev, "failed to decode interrupt\n");
+		return NULL;
+	}
+	ih = fdtbus_intr_establish_xname(ifsc->sc_phandle, 0, IPL_USB,
+					 FDT_INTR_MPSAFE, ehci_intr, hsc, device_xname(sc->sc_dev));
+	if (ih == NULL) {
+		aprint_error_dev(sc->sc_dev, "failed to establish interrupt on %s\n",
+				 intrstr);
+		return NULL;
+	}
+	aprint_normal_dev(sc->sc_dev, "interrupting on %s\n", intrstr);
+
+	return ih;
 }

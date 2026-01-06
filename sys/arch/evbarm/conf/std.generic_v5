@@ -43,7 +43,7 @@ makeoptions	KERNEL_VOFFSET_RUNTIME=1
 # The physical address is chosen by u-boot and determined by armv6_start.S.
 # The 64 byte offset is due to u-boot header.
 makeoptions	KERNEL_BASE_PHYS="0x00000040"
-makeoptions	KERNEL_BASE_VIRT="0xc0000040"
+makeoptions	KERNEL_BASE_VIRT="0x81000040"
 
 # General options
 options 	CHILD_MAX=1024	# 160 is too few

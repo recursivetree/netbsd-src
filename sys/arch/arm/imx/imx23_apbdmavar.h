@@ -124,6 +124,8 @@ typedef struct apbdma_command {
 	uint32_t pio_words[PIO_WORDS];
 } *apbdma_command_t;
 
+void apbdma_reset(struct apbdma_softc *);
+void apbdma_init(struct apbdma_softc *);
 void apbdma_cmd_chain(apbdma_command_t, apbdma_command_t, void *, bus_dmamap_t);
 void apbdma_cmd_buf(apbdma_command_t, bus_addr_t, bus_dmamap_t);
 void apbdma_chan_init(struct apbdma_softc *, unsigned int);

@@ -1,11 +1,11 @@
-/* $Id: imx23_pinctrlvar.h,v 1.2 2020/11/28 14:38:50 skrll Exp $ */
+/* $NetBSD $ */
 
-/*
- * Copyright (c) 2013 The NetBSD Foundation, Inc.
+/*-
+ * Copyright (c) 2026 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Petri Laakso.
+ * by Yuri Honegger.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,26 +29,59 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _ARM_IMX_IMX23_PINCTRLVAR_H_
-#define _ARM_IMX_IMX23_PINCTRLVAR_H_
+/*
+ * GPIO for the imx23 using the pinctrl HW block.
+ */
 
-#include <sys/bus.h>
+#include <sys/param.h>
+
 #include <sys/device.h>
-#include <sys/gpio.h>
 
-#include <dev/gpio/gpiovar.h>
+#include <dev/fdt/fdtvar.h>
 
-#define IMX23_NUM_GPIO_PINS 96
+#include <arm/fdt/arm_fdtvar.h>
+#include <arm/imx/imx23_pinctrlvar.h>
 
-struct imx23_pinctrl_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-	struct gpio_chipset_tag gc;
-	gpio_pin_t pins[IMX23_NUM_GPIO_PINS];
+static int imx23pinctrl_fdt_match(device_t, cfdata_t, void *);
+static void imx23pinctrl_fdt_attach(device_t, device_t, void *);
+
+CFATTACH_DECL_NEW(imx23pctl_fdt, sizeof(struct imx23_pinctrl_softc),
+		  imx23pinctrl_fdt_match, imx23pinctrl_fdt_attach, NULL, NULL);
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-pinctrl" },
+	DEVICE_COMPAT_EOL
 };
 
-void imx23_pinctrl_attach_common(struct imx23_pinctrl_softc *);
-void imx23_pinctrl_en_usb(void);
+static int
+imx23pinctrl_fdt_match(device_t parent, cfdata_t cf, void *aux)
+{
+	struct fdt_attach_args * const faa = aux;
 
-#endif /* !_ARM_IMX_IMX23_PINCTRLVAR_H_ */
+	return of_compatible_match(faa->faa_phandle, compat_data);
+}
+
+
+static void
+imx23pinctrl_fdt_attach(device_t parent, device_t self, void *aux)
+{
+	struct imx23_pinctrl_softc *const sc = device_private(self);
+	struct fdt_attach_args *const faa = aux;
+	const int phandle = faa->faa_phandle;
+
+	sc->sc_dev = self;
+	sc->sc_iot = faa->faa_bst;
+
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
+		return;
+	}
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
+		return;
+	}
+
+	imx23_pinctrl_attach_common(sc);
+}

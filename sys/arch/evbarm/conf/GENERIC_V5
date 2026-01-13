@@ -83,6 +83,10 @@ ld* 		at sdmmc?
 # Performance monitors
 pseudo-device 	tprof
 
+# GPIOs
+imx23pctl* 	at fdt?			# imx23 pin control+gpio
+gpio* 		at gpiobus?
+
 # UART
 com* 		at fdt?	pass 4		# UART
 plcom* 		at fdt?	pass 4		# ARM PL011 UART

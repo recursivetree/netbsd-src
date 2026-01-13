@@ -43,16 +43,6 @@
 #include <arm/imx/imx23_pinctrlvar.h>
 #include <arm/imx/imx23var.h>
 
-#define GPIO_PINS 96
-
-typedef struct imx23_pinctrl_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-	struct gpio_chipset_tag gc;
-	gpio_pin_t pins[GPIO_PINS];
-} *imx23_pinctrl_softc_t;
-
 static int	imx23_pinctrl_match(device_t, cfdata_t, void *);
 static void	imx23_pinctrl_attach(device_t, device_t, void *);
 static int	imx23_pinctrl_activate(device_t, enum devact);
@@ -68,7 +58,7 @@ static	int	imx23_pinctrl_gp_pin_read(void *, int);
 static	void	imx23_pinctrl_gp_pin_write(void *, int, int);
 static	void	imx23_pinctrl_gp_pin_ctl(void *, int, int);
 
-static imx23_pinctrl_softc_t _sc = NULL;
+static struct imx23_pinctrl_softc *_sc = NULL;
 
 CFATTACH_DECL3_NEW(imx23pctl,
         sizeof(struct imx23_pinctrl_softc),
@@ -87,7 +77,7 @@ CFATTACH_DECL3_NEW(imx23pctl,
 /*
  * Supported capabilities for each GPIO pin.
  */
-const static int pin_caps[GPIO_PINS] = {
+const static int pin_caps[IMX23_NUM_GPIO_PINS] = {
 	/*
 	 * HW_PINCTRL_MUXSEL0
 	 */
@@ -398,6 +388,14 @@ imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
+	imx23_pinctrl_attached = 1;
+
+	imx23_pinctrl_attach_common(sc);
+}
+
+void
+imx23_pinctrl_attach_common(struct imx23_pinctrl_softc *sc)
+{
 #if notyet
 	imx23_pinctrl_reset(sc);
 #endif
@@ -408,11 +406,9 @@ imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 
 	/* Set pin capabilities. */
 	int i;
-	for(i = 0; i < GPIO_PINS; i++) {
+	for(i = 0; i < IMX23_NUM_GPIO_PINS; i++) {
 		sc->pins[i].pin_caps = pin_caps[i];
 	}
-
-	imx23_pinctrl_attached = 1;
 
 	sc->gc.gp_cookie = sc;
 	sc->gc.gp_gc_open = imx23_pinctrl_gp_gc_open;
@@ -423,10 +419,10 @@ imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 
 	struct gpiobus_attach_args gpiobus_aa;
 	gpiobus_aa.gba_gc = &sc->gc;
-	gpiobus_aa.gba_npins = GPIO_PINS;
+	gpiobus_aa.gba_npins = IMX23_NUM_GPIO_PINS;
 	gpiobus_aa.gba_pins = sc->pins;
 
-	config_found(self, &gpiobus_aa, gpiobus_print, CFARGS_NONE);
+	config_found(sc->sc_dev, &gpiobus_aa, gpiobus_print, CFARGS_NONE);
 
 	return;
 }
@@ -530,7 +526,7 @@ static	int
 imx23_pinctrl_gp_pin_read(void *cookie, int pin)
 {
 	int value;
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 
 	if (PINCTRL_RD(sc, PIN2DIN_REG(pin)) & PIN2DIN_MASK(pin))
 		value = 1;
@@ -543,7 +539,7 @@ imx23_pinctrl_gp_pin_read(void *cookie, int pin)
 static	void
 imx23_pinctrl_gp_pin_write(void *cookie, int pin, int value)
 {
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 
 	if (value)
 		PINCTRL_WR(sc, PIN2DOUT_SET_REG(pin), PIN2DOUT_MASK(pin));
@@ -559,7 +555,7 @@ imx23_pinctrl_gp_pin_write(void *cookie, int pin, int value)
 static	void
 imx23_pinctrl_gp_pin_ctl(void *cookie, int pin, int flags)
 {
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 	uint32_t tmpr;
 
 	/* Enable GPIO pin. */

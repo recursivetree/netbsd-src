@@ -41,12 +41,6 @@
 #include <arm/imx/imx23_digctlvar.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct digctl_softc {
-	device_t sc_dev;
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_hdl;
-} *digctl_softc_t;
-
 static int	digctl_match(device_t, cfdata_t, void *);
 static void	digctl_attach(device_t, device_t, void *);
 static int	digctl_activate(device_t, enum devact);
@@ -57,7 +51,7 @@ static void     digctl_init(struct digctl_softc *);
 /* timecounter. */
 static u_int digctl_tc_get_timecount(struct timecounter *);
 
-static digctl_softc_t _sc = NULL;
+static struct digctl_softc *_sc = NULL;
 
 CFATTACH_DECL3_NEW(imx23digctl,
         sizeof(struct digctl_softc),
@@ -110,10 +104,17 @@ digctl_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
+	aprint_normal("\n");
+
+	digctl_attach_common(sc);
+
+	digctl_attached = 1;
+}
+
+void
+digctl_attach_common(struct digctl_softc *sc) {
 	digctl_reset(sc);
 	digctl_init(sc);
-
-	aprint_normal("\n");
 
 	/*
 	 * Setup timecounter to use digctl microseconds counter.
@@ -129,8 +130,6 @@ digctl_attach(device_t parent, device_t self, void *aux)
 	DCTL_WR(sc, HW_DIGCTL_CTRL_CLR, HW_DIGCTL_CTRL_XTAL24M_GATE);
 
 	tc_init(&tc_useconds);
-
-	digctl_attached = 1;
 
 	return;
 }

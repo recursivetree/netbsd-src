@@ -76,6 +76,9 @@ device	imx23digctl
 attach	imx23digctl at apbh
 file	arch/arm/imx/imx23_digctl.c	imx23digctl
 
+attach	imx23digctl at fdt with imx23digctl_fdt
+file	arch/arm/imx/imx23digctl_fdt.c	imx23digctl_fdt
+
 # PIN Control
 device	imx23pctl: gpiobus
 attach	imx23pctl at apbh

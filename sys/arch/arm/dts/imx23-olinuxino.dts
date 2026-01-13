@@ -39,4 +39,12 @@
 	chosen {
 		stdout-path = "serial2:115200n8";
 	};
+
+	apb@80000000 {
+		apbh@80000000 {
+			digctl@8001c000 {
+				status = "okay";
+			};
+		};
+	};
 };

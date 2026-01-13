@@ -38,7 +38,7 @@
 #include <dev/fdt/fdtvar.h>
 
 #include <arm/fdt/arm_fdtvar.h>
-#include <arm/imx/imx23var.h>
+#include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23_usbphyvar.h>
 
 static int imx23usbphy_fdt_match(device_t, cfdata_t, void *);
@@ -81,6 +81,8 @@ imx23usbphy_fdt_attach(device_t parent, device_t self, void *aux)
 		aprint_error(": couldn't map registers\n");
 		return;
 	}
+
+	clkctrl_en_usb();
 
 	imx23usbphy_attach_common(sc);
 }

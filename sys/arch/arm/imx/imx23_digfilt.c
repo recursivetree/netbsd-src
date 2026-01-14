@@ -343,16 +343,16 @@ static int
 digfilt_round_blocksize(void *priv, int bs, int mode,
 			const audio_params_t *param)
 {
-	int blocksize;
+	/* ensure we can transfer a block via DMA */
+	if(bs > ABPDMA_CMD_XFER_MAX_BYTES) {
+		bs = ABPDMA_CMD_XFER_MAX_BYTES;
+	}
 
-	if (bs > DIGFILT_BLOCKSIZE_MAX)
-		blocksize = DIGFILT_BLOCKSIZE_MAX;
-	else
-		blocksize = bs & ~(DIGFILT_BLOCKSIZE_ROUND-1);
-	if (blocksize < DIGFILT_BLOCKSIZE_ROUND)
-		blocksize = DIGFILT_BLOCKSIZE_ROUND;
+	/* round blocksize to multiple of a frame */
+	int off = bs % (param->channels * param->precision / 8);
+	bs -= off;
 
-	return blocksize;
+	return bs;
 }
 
 static int
@@ -374,15 +374,6 @@ digfilt_init_output(void *priv, void *buffer, int size)
 		else
 			dma_cmd[i].next = (void *)(sc->sc_c_dmamp->dm_segs[0].ds_addr + (sizeof(struct apbdma_command) * (1 + i)));
 
-		dma_cmd[i].control = __SHIFTIN(DIGFILT_BLOCKSIZE_MAX,  APBDMA_CMD_XFER_COUNT) |
-		    __SHIFTIN(1, APBDMA_CMD_CMDPIOWORDS) |
-		    APBDMA_CMD_SEMAPHORE |
-		    APBDMA_CMD_IRQONCMPLT |
-		    APBDMA_CMD_CHAIN |
-		    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-
-		dma_cmd[i].buffer = (void *)(sc->sc_c_dmamp->dm_segs[0].ds_addr);
-
 		dma_cmd[i].pio_words[0] = HW_AUDIOOUT_CTRL_WORD_LENGTH |
 		    HW_AUDIOOUT_CTRL_FIFO_ERROR_IRQ_EN |
 		    HW_AUDIOOUT_CTRL_RUN;
@@ -401,6 +392,8 @@ digfilt_start_output(void *priv, void *start, int bs, void (*intr)(void*), void 
 	apbdma_command_t dma_cmd;
 	bus_addr_t offset;
 
+	KASSERT(bs <= ABPDMA_CMD_XFER_MAX_BYTES);
+
 	sc->sc_intr = intr;
 	sc->sc_intarg = intarg;
 	dma_cmd = sc->sc_dmachain;
@@ -409,6 +402,12 @@ digfilt_start_output(void *priv, void *start, int bs, void (*intr)(void*), void 
 
 	dma_cmd[sc->sc_cmd_index].buffer =
 	    (void *)((bus_addr_t)sc->sc_dmamp->dm_segs[0].ds_addr + offset);
+	/* Update DMA command with number of bytes to transfer */
+	dma_cmd[sc->sc_cmd_index].control =
+	    __SHIFTIN(bs, APBDMA_CMD_XFER_COUNT) |
+	    __SHIFTIN(1, APBDMA_CMD_CMDPIOWORDS) | APBDMA_CMD_SEMAPHORE |
+	    APBDMA_CMD_IRQONCMPLT | APBDMA_CMD_CHAIN |
+	    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
 
 	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, offset, bs, BUS_DMASYNC_PREWRITE);
 	bus_dmamap_sync(sc->sc_dmat, sc->sc_c_dmamp,

@@ -100,6 +100,7 @@ plcom* 		at fdt?	pass 4		# ARM PL011 UART
 
 # Various
 imx23digctl* at fdt? pass 1		# i.MX23 digctl block
+imx23rtc* at fdt? pass 2			# i.MX23 rtc block
 
 # I2C - needed for the USB subsystem
 iicmux* 	at fdt? pass 5		# I2C mux virtual controllers

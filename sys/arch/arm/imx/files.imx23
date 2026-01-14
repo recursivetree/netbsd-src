@@ -119,6 +119,9 @@ device imx23rtc
 attach imx23rtc at apbx
 file arch/arm/imx/imx23_rtc.c		imx23rtc
 
+attach	imx23rtc at fdt with imx23rtc_fdt
+file	arch/arm/imx/imx23rtc_fdt.c	imx23rtc_fdt
+
 # Digital filter: Audio I/O
 device imx23digfilt: audiobus
 attach imx23digfilt at apbx

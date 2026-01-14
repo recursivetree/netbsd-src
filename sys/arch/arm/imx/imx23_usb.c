@@ -110,13 +110,13 @@ imx23_usb_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* Enable PLL outputs for USB PHY. */
-	clkctrl_en_usb();
+	clkctrl_en_usbphy();
 
 	/* Enable external USB chip. */
 	imx23_pinctrl_en_usb();
 
 	/* USB clock on. */
-	digctl_usb_clkgate(0);
+	clkctrl_en_usbc_clkgate(0);
 
 	aprint_normal("\n");
 

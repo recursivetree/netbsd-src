@@ -39,6 +39,6 @@ struct digctl_softc {
 };
 
 void digctl_attach_common(struct digctl_softc *sc);
-void digctl_usb_clkgate(int);
+void digctl_clkgate_write(bus_size_t, uint32_t);
 
 #endif /* !_ARM_IMX_IMX23_DIGCTLVAR_H_ */

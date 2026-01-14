@@ -36,8 +36,12 @@
 #include <sys/device.h>
 #include <sys/errno.h>
 
+#include <dev/clk/clk_backend.h>
+
 #include <arm/imx/imx23_clkctrlreg.h>
 #include <arm/imx/imx23_clkctrlvar.h>
+#include <arm/imx/imx23_digctlreg.h>
+#include <arm/imx/imx23_digctlvar.h>
 #include <arm/imx/imx23var.h>
 
 static int	clkctrl_match(device_t, cfdata_t, void *);
@@ -45,8 +49,22 @@ static void	clkctrl_attach(device_t, device_t, void *);
 static int	clkctrl_activate(device_t, enum devact);
 
 static void     clkctrl_init(struct clkctrl_softc *);
+static void 	clkctrl_create_clkgate(struct clkctrl_softc *, u_int,
+		       const char *, bus_addr_t, bus_addr_t, u_int, bool);
+
+static struct clk *clkctrl_get(void *, const char *);
+static u_int 	clkctrl_get_rate(void *, struct clk *);
+static int 	clkctrl_enable(void *, struct clk *);
+static int 	clkctrl_disable(void *, struct clk *);
 
 static struct clkctrl_softc *_sc = NULL;
+
+struct clk_funcs clkctrl_funcs = {
+	.enable = clkctrl_enable,
+	.disable = clkctrl_disable,
+	.get = clkctrl_get,
+	.get_rate = clkctrl_get_rate,
+};
 
 CFATTACH_DECL3_NEW(imx23clkctrl,
         sizeof(struct clkctrl_softc),
@@ -111,14 +129,91 @@ clkctrl_attach_common(struct clkctrl_softc *sc) {
 
 	clkctrl_init(sc);
 
+	sc->sc_clk_domain.name = device_xname(sc->sc_dev);
+	sc->sc_clk_domain.funcs = &clkctrl_funcs;
+	sc->sc_clk_domain.priv = sc;
+
+	clkctrl_create_clkgate(sc, IMX23_USB_CLK, "usb", HW_DIGCTL_CTRL_CLR,
+			       HW_DIGCTL_CTRL_SET, HW_DIGCTL_CTRL_USB_CLKGATE,
+			       true);
+	clkctrl_create_clkgate(sc, IMX23_USBPHY_CLK, "usbphy",
+			       HW_CLKCTRL_PLLCTRL0_SET, HW_CLKCTRL_PLLCTRL0_CLR,
+			       HW_CLKCTRL_PLLCTRL0_EN_USB_CLKS, false);
+	clkctrl_create_clkgate(sc, IMX23_FILT_CLK, "xtal_filt",
+			       HW_CLKCTRL_XTAL_CLR, HW_CLKCTRL_XTAL_SET,
+			       HW_CLKCTRL_XTAL_FILT_CLK24M_GATE, false);
+
 	return;
 }
 
 static int
 clkctrl_activate(device_t self, enum devact act)
 {
-
 	return EOPNOTSUPP;
+}
+
+static void
+clkctrl_create_clkgate(struct clkctrl_softc *sc, u_int index, const char *name,
+		       bus_addr_t enable_reg, bus_addr_t disable_reg,
+		       u_int bitfield, bool is_digctl)
+{
+	sc->sc_clks[index] = (struct clkctrl_clk){
+		.clk = {
+		    .name = name,
+		    .domain = &sc->sc_clk_domain,
+		},
+		.enable_reg = enable_reg,
+		.disable_reg = disable_reg,
+		.bitfield = bitfield,
+		.is_digctl = is_digctl,
+	};
+
+	clk_attach(&sc->sc_clks[index].clk);
+}
+
+static struct clk *
+clkctrl_get(void *priv, const char *name)
+{
+	struct clkctrl_softc * const sc = priv;
+
+	for (size_t i = 0; i < IMX23_NUM_CLK; i++) {
+		if (strcmp(name, sc->sc_clks[i].clk.name) == 0)
+			return &sc->sc_clks[i].clk;
+	}
+
+	return NULL;
+}
+
+static u_int
+clkctrl_get_rate(void *priv, struct clk *clk)
+{
+	return 0;
+}
+
+static int
+clkctrl_enable(void *priv, struct clk *raw)
+{
+	struct clkctrl_softc * const sc = priv;
+	struct clkctrl_clk *clk = (struct clkctrl_clk *) raw;
+
+	if(clk->is_digctl){
+		digctl_clkgate_write(clk->enable_reg, clk->bitfield);
+	} else {
+		CLKCTRL_WR(sc, clk->enable_reg, clk->bitfield);
+	}
+
+	return 0;
+}
+
+static int
+clkctrl_disable(void *priv, struct clk *raw)
+{
+	struct clkctrl_softc * const sc = priv;
+	struct clkctrl_clk *clk = (struct clkctrl_clk *) raw;
+
+	CLKCTRL_WR(sc, clk->disable_reg, clk->bitfield);
+
+	return 0;
 }
 
 static void
@@ -133,7 +228,7 @@ clkctrl_init(struct clkctrl_softc *sc)
  *
  */
 void
-clkctrl_en_usb(void)
+clkctrl_en_usbphy(void)
 {
 	struct clkctrl_softc *sc = _sc;
 
@@ -142,8 +237,8 @@ clkctrl_en_usb(void)
                 return;
         }
 
-	CLKCTRL_WR(sc, HW_CLKCTRL_PLLCTRL0_SET,
-	    HW_CLKCTRL_PLLCTRL0_EN_USB_CLKS);
+	struct clk *usb_clk = &sc->sc_clks[IMX23_USBPHY_CLK].clk;
+	clk_enable(usb_clk);
 
 	return;
 }
@@ -162,7 +257,27 @@ clkctrl_en_filtclk(void)
 		return;
 	}
 
-	CLKCTRL_WR(sc, HW_CLKCTRL_XTAL_CLR, HW_CLKCTRL_XTAL_FILT_CLK24M_GATE);
+	struct clk *filt_clk = &sc->sc_clks[IMX23_FILT_CLK].clk;
+	clk_enable(filt_clk);
+
+	return;
+}
+
+/*
+ * Control USB controller clocks.
+ */
+void
+clkctrl_en_usbc_clkgate(int value)
+{
+	struct clkctrl_softc *sc = _sc;
+
+	if (sc == NULL) {
+		aprint_error("clkctrl is not initialized");
+		return;
+	}
+
+	struct clk *usb_clk = &sc->sc_clks[IMX23_USB_CLK].clk;
+	clk_enable(usb_clk);
 
 	return;
 }

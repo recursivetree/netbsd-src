@@ -106,7 +106,7 @@ iicmux* 	at fdt? pass 5		# I2C mux virtual controllers
 iic* 		at i2cbus?
 
 # USB
-imx23usbphy*	at fdt? pass 1	# i.MX23 usb phy
+imx23usbphy*	at fdt? pass 2	# i.MX23 usb phy
 
 imxusbc* 	at fdt? pass 6 # i.MX23 usb controller
 

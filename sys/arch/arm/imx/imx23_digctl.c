@@ -157,12 +157,8 @@ digctl_init(struct digctl_softc *sc)
 	return;
 }
 
-/*
- * Control USB controller clocks.
- */
 void
-digctl_usb_clkgate(int value)
-{
+digctl_clkgate_write(bus_size_t reg, uint32_t value) {
 	struct digctl_softc *sc = _sc;
 
 	if (sc == NULL) {
@@ -170,15 +166,7 @@ digctl_usb_clkgate(int value)
 		return;
 	}
 
-	if (value) {
-		/* Clocks OFF. */
-		DCTL_WR(sc, HW_DIGCTL_CTRL_SET, HW_DIGCTL_CTRL_USB_CLKGATE);
-	} else {
-		/* Clocks ON. */
-		DCTL_WR(sc, HW_DIGCTL_CTRL_CLR, HW_DIGCTL_CTRL_USB_CLKGATE);
-	}
-
-	return;
+	DCTL_WR(sc, reg, value);
 }
 
 /*

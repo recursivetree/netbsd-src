@@ -113,7 +113,8 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 	fdtbus_regulator_enable(vbus_reg);
 
 	/* USB clock on. */
-	digctl_usb_clkgate(0);
+	struct clk *usb_clk = fdtbus_clock_get_index(phandle, 0);
+	clk_enable(usb_clk);
 
 	sc->sc_imxusbc.sc_ehci_size = IMXUSB_EHCI_SIZE;
 	sc->sc_imxusbc.sc_ehci_offset = IMXUSB_EHCI_SIZE;

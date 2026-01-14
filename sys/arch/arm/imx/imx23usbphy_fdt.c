@@ -82,7 +82,9 @@ imx23usbphy_fdt_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	clkctrl_en_usb();
+	/* Enable PLL outputs for USB PHY. */
+	struct clk *usbphy_clk = fdtbus_clock_get_index(phandle, 0);
+	clk_enable(usbphy_clk);
 
 	imx23usbphy_attach_common(sc);
 }

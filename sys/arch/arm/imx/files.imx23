@@ -96,10 +96,10 @@ file	arch/arm/imx/imx23gpio_fdt.c	imx23gpio_fdt
 
 # Clock Control
 device	imx23clkctrl
-attach	imx23clkctrl at apbx
+attach	imx23clkctrl at apbx: clk
 file	arch/arm/imx/imx23_clkctrl.c	imx23clkctrl
 
-attach	imx23clkctrl at fdt with imx23clkctrl_fdt
+attach	imx23clkctrl at fdt with imx23clkctrl_fdt: fdt_clock
 file	arch/arm/imx/imx23clkctrl_fdt.c	imx23clkctrl_fdt
 
 # USB host controller

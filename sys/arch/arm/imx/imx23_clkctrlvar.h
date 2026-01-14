@@ -35,14 +35,32 @@
 #include <sys/bus.h>
 #include <sys/device.h>
 
+#include <dev/clk/clk_backend.h>
+
+#define IMX23_USB_CLK 		0
+#define IMX23_USBPHY_CLK 	1
+#define IMX23_FILT_CLK 		2
+#define IMX23_NUM_CLK 		3
+
+struct clkctrl_clk {
+	struct clk clk; /* must stay first member */
+	bus_size_t enable_reg;
+	bus_size_t disable_reg;
+	uint32_t bitfield;
+	bool is_digctl;
+};
+
 struct clkctrl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
+	struct clk_domain sc_clk_domain;
+	struct clkctrl_clk sc_clks[IMX23_NUM_CLK];
 };
 
 void clkctrl_attach_common(struct clkctrl_softc *);
-void clkctrl_en_usb(void);
+void clkctrl_en_usbphy(void);
 void clkctrl_en_filtclk(void);
+void clkctrl_en_usbc_clkgate(int);
 
 #endif /* !_ARM_IMX_IMX23_CLKCTRLVAR_H_ */

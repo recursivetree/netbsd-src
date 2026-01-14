@@ -51,7 +51,6 @@
 #include <arm/imx/imx23var.h>
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23_digctlvar.h>
-#include <arm/imx/imx23_pinctrlvar.h>
 
 struct imxusbc_fdt_softc {
 	struct imxusbc_softc sc_imxusbc; /* Must be first */
@@ -105,7 +104,13 @@ imx23usbc_fdt_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* Enable external USB chip. */
-	imx23_pinctrl_en_usb();
+	struct fdtbus_regulator *vbus_reg =
+	    fdtbus_regulator_acquire(phandle, "vbus-supply");
+	if(vbus_reg == NULL){
+		aprint_error(": couldn't get vbus regulator\n");
+		return;
+	}
+	fdtbus_regulator_enable(vbus_reg);
 
 	/* USB clock on. */
 	digctl_usb_clkgate(0);

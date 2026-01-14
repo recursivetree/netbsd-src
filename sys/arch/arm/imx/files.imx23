@@ -126,3 +126,6 @@ file	arch/arm/imx/imx23rtc_fdt.c	imx23rtc_fdt
 device imx23digfilt: audiobus
 attach imx23digfilt at apbx
 file arch/arm/imx/imx23_digfilt.c	imx23digfilt
+
+attach	imx23digfilt at fdt with imx23digfilt_fdt
+file	arch/arm/imx/imx23digfilt_fdt.c	imx23digfilt_fdt

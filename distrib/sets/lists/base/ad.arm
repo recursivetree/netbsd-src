@@ -15,7 +15,6 @@
 ./usr/mdec/boot32				base-sysutil-bin	endian=1234
 ./usr/mdec/boot32,ffa				base-sysutil-bin	endian=1234
 ./usr/mdec/bootarm.efi				base-sysutil-bin	uefi
-./usr/mdec/bootimx23				base-sysutil-bin	endian=1234
 ./usr/mdec/bootmini2440				base-sysutil-bin
 ./usr/mdec/gzboot_ADI_BRH_0x00140000.bin	base-sysutil-bin
 ./usr/mdec/gzboot_GEMINI_0x01600000.bin		base-sysutil-bin	endian=1234

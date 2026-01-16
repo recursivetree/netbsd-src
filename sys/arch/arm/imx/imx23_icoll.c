@@ -42,12 +42,13 @@ __KERNEL_RCSID(0, "$NetBSD: imx23_icoll.c,v 1.6 2025/10/09 06:15:16 skrll Exp $"
 #include <sys/errno.h>
 #include <sys/systm.h>
 
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/cpufunc.h>
 
 #include <arm/pic/picvar.h>
 
 #include <arm/imx/imx23_icollreg.h>
-#include <arm/imx/imx23_icollvar.h>
 #include <arm/imx/imx23var.h>
 
 #define ICOLL_SOFT_RST_LOOP 455		/* At least 1 us ... */
@@ -74,6 +75,12 @@ __KERNEL_RCSID(0, "$NetBSD: imx23_icoll.c,v 1.6 2025/10/09 06:15:16 skrll Exp $"
 	((struct icoll_softc *)((char *)(pic) -				\
 		offsetof(struct icoll_softc, sc_pic)))
 
+struct icoll_softc {
+	struct pic_softc sc_pic;
+	bus_space_tag_t sc_iot;
+	bus_space_handle_t sc_hdl;
+};
+
 /*
  * pic callbacks.
  */
@@ -89,7 +96,15 @@ static void	icoll_set_priority(struct pic_softc *, int);
  */
 static int	icoll_match(device_t, cfdata_t, void *);
 static void	icoll_attach(device_t, device_t, void *);
-static int	icoll_activate(device_t, enum devact);
+
+/*
+ * fdt callbacks
+ */
+static void *	icoll_fdt_establish(device_t, u_int *, int, int,
+			 int (*)(void *), void *, const char *);
+static void	icoll_fdt_disestablish(device_t, void *);
+static bool	icoll_fdt_intrstr(device_t, u_int *, char *, size_t);
+void 		icoll_intr_dispatch(struct clockframe *);
 
 const static struct pic_ops icoll_pic_ops = {
 	.pic_unblock_irqs = icoll_unblock_irqs,
@@ -100,6 +115,18 @@ const static struct pic_ops icoll_pic_ops = {
 	.pic_set_priority = icoll_set_priority
 };
 
+struct fdtbus_interrupt_controller_func imx23icoll_fdt_funcs = {
+	.establish = icoll_fdt_establish,
+	.disestablish = icoll_fdt_disestablish,
+	.intrstr = icoll_fdt_intrstr
+};
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-icoll" },
+	{ .compat = "fsl,icoll" },
+	DEVICE_COMPAT_EOL
+};
+
 /* For IRQ handler. */
 static struct icoll_softc *icoll_sc;
 
@@ -108,21 +135,14 @@ static struct icoll_softc *icoll_sc;
  */
 static void	icoll_reset(struct icoll_softc *);
 
-CFATTACH_DECL3_NEW(imx23icoll,
-	sizeof(struct icoll_softc),
-	icoll_match,
-	icoll_attach,
-	NULL,
-	icoll_activate,
-	NULL,
-	NULL,
-	0);
+CFATTACH_DECL_NEW(imx23icoll, sizeof(struct icoll_softc),
+		  icoll_match, icoll_attach, NULL, NULL);
 
 /*
  * ARM interrupt handler.
  */
 void
-imx23_intr_dispatch(struct clockframe *frame)
+icoll_intr_dispatch(struct clockframe *frame)
 {
 	struct cpu_info * const ci = curcpu();
 	struct pic_softc *pic_sc;
@@ -264,64 +284,84 @@ icoll_set_priority(struct pic_softc *pic, int newipl)
 	}
 }
 
+static bool
+icoll_fdt_intrstr(device_t dev, u_int *specifier, char *buf, size_t buflen)
+{
+	const u_int irq = be32toh(*specifier);
+
+	snprintf(buf, buflen, "icoll irq %d", irq);
+
+	return true;
+}
+
+static void *
+icoll_fdt_establish(device_t dev, u_int *specifier, int ipl, int flags,
+			 int (*func)(void *), void *arg, const char *xname)
+{
+	const u_int irq = be32toh(*specifier);
+	const u_int mpsafe = (flags & FDT_INTR_MPSAFE) ? IST_MPSAFE : 0;
+
+	return intr_establish_xname(irq, ipl, IST_LEVEL | mpsafe, func, arg,
+				    xname);
+}
+
+static void
+icoll_fdt_disestablish(device_t dev, void *ih)
+{
+	intr_disestablish(ih);
+}
+
 /*
  * autoconf(9) callbacks.
  */
 static int
 icoll_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if ((aa->aa_addr == HW_ICOLL_BASE) && (aa->aa_size == HW_ICOLL_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 icoll_attach(device_t parent, device_t self, void *aux)
 {
-	static int icoll_attached = 0;
-	struct icoll_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
+	struct icoll_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
 
-	if (icoll_attached)
-		return;
-
-	if (bus_space_map(aa->aa_iot,
-	    aa->aa_addr, aa->aa_size, 0, &(sc->sc_hdl))) {
-		aprint_error_dev(self, "unable to map bus space\n");
-		return;
-	}
-
-	imx23icoll_init(sc, self,  aa->aa_iot);
-
-	aprint_normal("\n");
-	icoll_attached = 1;
-
-	return;
-}
-
-void
-imx23icoll_init(struct icoll_softc *sc, device_t self, bus_space_tag_t iot)
-{
 	icoll_sc = sc;
-
-	sc->sc_iot = iot;
-
+	sc->sc_iot = faa->faa_bst;
 	sc->sc_pic.pic_maxsources = IRQ_LAST + 1;
 	sc->sc_pic.pic_ops = &icoll_pic_ops;
 	strlcpy(sc->sc_pic.pic_name, device_xname(self),
-					sizeof(sc->sc_pic.pic_name));
+		sizeof(sc->sc_pic.pic_name));
+
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
+		return;
+	}
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
+		return;
+	}
 
 	icoll_reset(sc);
 	pic_add(&sc->sc_pic, 0);
-}
 
-static int
-icoll_activate(device_t self, enum devact act)
-{
-	return EOPNOTSUPP;
+	int error = fdtbus_register_interrupt_controller(self, phandle,
+							 &imx23icoll_fdt_funcs);
+	if (error) {
+		aprint_error(
+		    "imx23icoll_fdt: couldn't register with fdtbus: %d\n",
+		    error);
+		return;
+	}
+
+	arm_fdt_irq_set_handler((void (*)(void *))icoll_intr_dispatch);
+
+	aprint_normal("\n");
 }
 
 /*

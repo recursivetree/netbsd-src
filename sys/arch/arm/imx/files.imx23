@@ -51,11 +51,8 @@ file	arch/arm/imx/imx23_plcom.c	imx23plcom
 
 # Timers and rotary decoder
 device	imx23timrot: apbx
-attach	imx23timrot at apbx
+attach	imx23timrot at fdt: fdt_clock
 file	arch/arm/imx/imx23_timrot.c	imx23timrot
-
-attach	imx23timrot at fdt with imx23timrot_fdt: fdt_clock
-file	arch/arm/imx/imx23timrot_fdt.c	imx23timrot_fdt
 
 
 # APB{H,X} DMA

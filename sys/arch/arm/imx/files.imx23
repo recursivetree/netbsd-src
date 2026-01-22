@@ -51,7 +51,7 @@ file	arch/arm/imx/imx23_timrot.c	imx23timrot
 
 # APB{H,X} DMA
 device	imx23apbdma
-attach	imx23apbdma at apbh, apbx
+attach	imx23apbdma at fdt: fdt_dma
 file	arch/arm/imx/imx23_apbdma.c	imx23apbdma
 
 # USB PHY

@@ -37,7 +37,7 @@ file	arch/arm/imx/imx23_icoll.c	imx23icoll
 
 # Synchronous Serial Port (for SD/MMC)
 device	imx23mmc: sdmmcbus
-attach	imx23mmc at apbh
+attach	imx23mmc at fdt
 file	arch/arm/imx/imx23_mmc.c	imx23mmc
 
 # PL011 Debug console

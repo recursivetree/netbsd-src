@@ -39,16 +39,15 @@
 #include <sys/mutex.h>
 #include <sys/systm.h>
 
-#include <arm/pic/picvar.h>
-
-#include <arm/imx/imx23_apbdmavar.h>
-#include <arm/imx/imx23_icollreg.h>
-#include <arm/imx/imx23_sspreg.h>
-#include <arm/imx/imx23var.h>
-
+#include <dev/fdt/fdtvar.h>
 #include <dev/sdmmc/sdmmcchip.h>
 #include <dev/sdmmc/sdmmcreg.h>
 #include <dev/sdmmc/sdmmcvar.h>
+
+#include <arm/imx/imx23_icollreg.h>
+#include <arm/imx/imx23_mmcreg.h>
+#include <arm/imx/imx23var.h>
+#include <arm/pic/picvar.h>
 
 /*
  * SD/MMC host controller driver for i.MX23.
@@ -59,44 +58,33 @@
  * - Uset GPIO for SD card detection.
  */
 
-#define DMA_MAXNSEGS ((MAXPHYS / PAGE_SIZE) + 1)
-
 typedef struct issp_softc {
 	device_t sc_dev;
-	apbdma_softc_t sc_dmac;
-	bus_dma_tag_t sc_dmat;
-	bus_dmamap_t sc_dmamp;
-	bus_size_t sc_chnsiz;
-	bus_dma_segment_t sc_ds[1];
-	int sc_rseg;
+	struct fdtbus_dma *dma_channel;
 	bus_space_handle_t sc_hdl;
 	bus_space_tag_t sc_iot;
 	device_t sc_sdmmc;
 	kmutex_t sc_lock;
 	struct kcondvar sc_intr_cv;
-	unsigned int dma_channel;
-	uint32_t sc_dma_error;
 	uint32_t sc_irq_error;
 	uint8_t sc_state;
 	uint8_t sc_bus_width;
+	uint32_t pio_words[3];
 } *issp_softc_t;
+
 
 static int	issp_match(device_t, cfdata_t, void *);
 static void	issp_attach(device_t, device_t, void *);
-static int	issp_activate(device_t, enum devact);
 
 static void	issp_reset(struct issp_softc *);
 static void	issp_init(struct issp_softc *);
 static uint32_t	issp_set_sck(struct issp_softc *, uint32_t);
-static int	issp_dma_intr(void *);
+static void	issp_dma_intr(void *);
 static int	issp_error_intr(void *);
-static void	issp_ack_intr(struct issp_softc *);
-static void	issp_create_dma_cmd_list_multi(issp_softc_t, void *,
-    struct sdmmc_command *);
-static void	issp_create_dma_cmd_list_single(issp_softc_t, void *,
-    struct sdmmc_command *);
-static void	issp_create_dma_cmd_list(issp_softc_t, void *,
-    struct sdmmc_command *);
+static void 	issp_prepare_data_command(issp_softc_t, struct fdtbus_dma_req *,
+					  struct sdmmc_command *);
+static void 	issp_prepare_command(issp_softc_t, struct fdtbus_dma_req *,
+				     struct sdmmc_command *);
 
 /* sdmmc(4) driver chip function prototypes. */
 static int	issp_host_reset(sdmmc_chipset_handle_t);
@@ -128,16 +116,8 @@ static struct sdmmc_chip_functions issp_functions = {
 	.card_intr_ack	= issp_card_intr_ack
 };
 
-CFATTACH_DECL3_NEW(imx23mmc,
-	sizeof(struct issp_softc),
-	issp_match,
-	issp_attach,
-	NULL,
-	issp_activate,
-	NULL,
-	NULL,
-	0
-);
+CFATTACH_DECL_NEW(imx23mmc, sizeof(struct issp_softc), issp_match,
+		  issp_attach, NULL, NULL);
 
 #define SSP_SOFT_RST_LOOP 455	/* At least 1 us ... */
 
@@ -157,16 +137,9 @@ CFATTACH_DECL3_NEW(imx23mmc,
 #define BUS_WIDTH_4_BIT 0x1
 #define BUS_WIDTH_8_BIT 0x2
 
-#define SSP1_ATTACHED	1
-#define SSP2_ATTACHED	2
-
 /* Flags for sc_state. */
 #define SSP_STATE_IDLE	0
 #define SSP_STATE_DMA	1
-
-#define PIO_WORD_CTRL0	0
-#define PIO_WORD_CMD0	1
-#define PIO_WORD_CMD1	2
 
 #define HW_SSP_CTRL1_IRQ_MASK (						\
     HW_SSP_CTRL1_SDIO_IRQ |						\
@@ -181,129 +154,71 @@ CFATTACH_DECL3_NEW(imx23mmc,
 /* SSP does not support over 64k transfer size. */
 #define MAX_TRANSFER_SIZE 65536
 
+/* Offsets of pio words in pio array */
+#define PIO_WORD_CTRL0	0
+#define PIO_WORD_CMD0	1
+#define PIO_WORD_CMD1	2
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-mmc" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 issp_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args *const faa = aux;
 
-	if ((aa->aa_addr == HW_SSP1_BASE) && (aa->aa_size == HW_SSP1_SIZE))
-		return 1;
-
-	if ((aa->aa_addr == HW_SSP2_BASE) && (aa->aa_size == HW_SSP2_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 issp_attach(device_t parent, device_t self, void *aux)
 {
-	struct issp_softc *sc = device_private(self);
-	struct apb_softc *sc_parent = device_private(parent);
-	struct apb_attach_args *aa = aux;
+	struct issp_softc *const sc = device_private(self);
+	struct fdt_attach_args *const faa = aux;
+	const int phandle = faa->faa_phandle;
 	struct sdmmcbus_attach_args saa;
-	static int ssp_attached = 0;
-	int error;
-	void *intr;
+	char intrstr[128];
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
-	sc->sc_dmat = aa->aa_dmat;
+	sc->sc_iot = faa->faa_bst;
 
-	/* Test if device instance is already attached. */
-	if (aa->aa_addr == HW_SSP1_BASE && ISSET(ssp_attached, SSP1_ATTACHED)) {
-		aprint_error_dev(sc->sc_dev, "SSP1 already attached\n");
+	/* map ssp control registers */
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
 		return;
 	}
-	if (aa->aa_addr == HW_SSP2_BASE && ISSET(ssp_attached, SSP2_ATTACHED)) {
-		aprint_error_dev(sc->sc_dev, "SSP2 already attached\n");
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
-
-	if (aa->aa_addr == HW_SSP1_BASE) {
-		sc->dma_channel = APBH_DMA_CHANNEL_SSP1;
-	}
-	if (aa->aa_addr == HW_SSP2_BASE) {
-		sc->dma_channel = APBH_DMA_CHANNEL_SSP2;
-	}
-
-	/* This driver requires DMA functionality from the bus.
-	 * Parent bus passes handle to the DMA controller instance. */
-	if (sc_parent->dmac == NULL) {
-		aprint_error_dev(sc->sc_dev, "DMA functionality missing\n");
-		return;
-	}
-	sc->sc_dmac = device_private(sc_parent->dmac);
 
 	/* Initialize lock. */
-	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SDMMC);
+	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SCHED);
 
 	/* Condvar to wait interrupt complete. */
 	cv_init(&sc->sc_intr_cv, "ssp_intr");
 
-	/* Establish interrupt handlers for SSP errors and SSP DMA. */
-	if (aa->aa_addr == HW_SSP1_BASE) {
-		intr = intr_establish(IRQ_SSP1_DMA, IPL_SDMMC, IST_LEVEL,
-		    issp_dma_intr, sc);
-		if (intr == NULL) {
-			aprint_error_dev(sc->sc_dev, "Unable to establish "
-			    "interrupt for SSP1 DMA\n");
-			return;
-		}
-		intr = intr_establish(IRQ_SSP1_ERROR, IPL_SDMMC, IST_LEVEL,
-		    issp_error_intr, sc);
-		if (intr == NULL) {
-			aprint_error_dev(sc->sc_dev, "Unable to establish "
-			    "interrupt for SSP1 ERROR\n");
-			return;
-		}
-	}
-
-	if (aa->aa_addr == HW_SSP2_BASE) {
-		intr = intr_establish(IRQ_SSP2_DMA, IPL_SDMMC, IST_LEVEL,
-		    issp_dma_intr, sc);
-		if (intr == NULL) {
-			aprint_error_dev(sc->sc_dev, "Unable to establish "
-			    "interrupt for SSP2 DMA\n");
-			return;
-		}
-		intr = intr_establish(IRQ_SSP2_ERROR, IPL_SDMMC, IST_LEVEL,
-		    issp_error_intr, sc);
-		if (intr == NULL) {
-			aprint_error_dev(sc->sc_dev, "Unable to establish "
-			    "interrupt for SSP2 ERROR\n");
-			return;
-		}
-	}
-
-	/* Allocate DMA handle. */
-	error = bus_dmamap_create(sc->sc_dmat, MAXPHYS, 1, MAXPHYS,
-	    0, BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW, &sc->sc_dmamp);
-	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to allocate DMA handle\n");
+	/* acquire DMA channel */
+	sc->dma_channel = fdtbus_dma_get(phandle,"rx-tx", issp_dma_intr, sc);
+	if(sc->dma_channel == NULL) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
 
-	/* Allocate memory for DMA command chain. */
-	sc->sc_chnsiz = sizeof(struct apbdma_command) *
-	    (MAX_TRANSFER_SIZE / SDMMC_SECTOR_SIZE);
-
-	error = bus_dmamem_alloc(sc->sc_dmat, sc->sc_chnsiz, PAGE_SIZE, 0,
-	    sc->sc_ds, 1, &sc->sc_rseg, BUS_DMA_NOWAIT);
-	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to allocate DMA memory\n");
+	/* establish error interrupt */
+	if (!fdtbus_intr_str(phandle, 0, intrstr, sizeof(intrstr))) {
+		aprint_error(": failed to decode interrupt\n");
 		return;
 	}
-
-	/* Initialize DMA channel. */
-	apbdma_chan_init(sc->sc_dmac, sc->dma_channel);
-
-	/* Map SSP bus space. */
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl)) {
-		aprint_error_dev(sc->sc_dev, "Unable to map SSP bus space\n");
+	void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_SDMMC, IST_LEVEL,
+					       issp_error_intr, sc,
+					 device_xname(self));
+	if (ih == NULL) {
+		aprint_error_dev(self, "couldn't establish error interrupt\n");
 		return;
 	}
 
@@ -320,11 +235,10 @@ issp_attach(device_t parent, device_t self, void *aux)
 	saa.saa_sct	= &issp_functions;
 	saa.saa_spi_sct	= NULL;
 	saa.saa_sch	= sc;
-	saa.saa_dmat	= aa->aa_dmat;
+	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= SSP_CLK_MIN;
 	saa.saa_clkmax	= SSP_CLK_MAX;
-	saa.saa_caps	= SMC_CAPS_DMA | SMC_CAPS_4BIT_MODE |
-	    SMC_CAPS_MULTI_SEG_DMA;
+	saa.saa_caps	= SMC_CAPS_DMA | SMC_CAPS_4BIT_MODE;
 
 	sc->sc_sdmmc = config_found(sc->sc_dev, &saa, NULL, CFARGS_NONE);
 	if (sc->sc_sdmmc == NULL) {
@@ -332,19 +246,7 @@ issp_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	/* Device instance was successfully attached. */
-	if (aa->aa_addr == HW_SSP1_BASE)
-		ssp_attached |= SSP1_ATTACHED;
-	if (aa->aa_addr == HW_SSP2_BASE)
-		ssp_attached |= SSP2_ATTACHED;
-
 	return;
-}
-
-static int
-issp_activate(device_t self, enum devact act)
-{
-	return EOPNOTSUPP;
 }
 
 /*
@@ -378,7 +280,7 @@ issp_host_maxblklen(sdmmc_chipset_handle_t sch)
 static int
 issp_card_detect(sdmmc_chipset_handle_t sch)
 {
-	return 1;
+	return 1; /* the olinuxino has no card detection */
 }
 
 static int
@@ -454,8 +356,7 @@ static void
 issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 {
 	issp_softc_t sc = sch;
-	void *dma_chain;
-	int error;
+	struct fdtbus_dma_req req;
 
 	/* SSP does not support over 64k transfer size. */
 	if (cmd->c_data != NULL && cmd->c_datalen > MAX_TRANSFER_SIZE) {
@@ -465,74 +366,31 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		return;
 	}
 
-	/* Map dma_chain to point allocated previously allocated DMA chain. */
-	error = bus_dmamem_map(sc->sc_dmat, sc->sc_ds, 1, sc->sc_chnsiz,
-	    &dma_chain, BUS_DMA_NOWAIT);
-	if (error) {
-		aprint_error_dev(sc->sc_dev, "bus_dmamem_map: %d\n", error);
-		cmd->c_error = error;
-		goto out;
-	}
-
-	error = bus_dmamap_load(sc->sc_dmat, sc->sc_dmamp, dma_chain,
-	    sc->sc_chnsiz, NULL, BUS_DMA_NOWAIT|BUS_DMA_WRITE);
-	if (error) {
-		aprint_error_dev(sc->sc_dev, "bus_dmamap_load: %d\n", error);
-		cmd->c_error = error;
-		goto dmamem_unmap;
-	}
-
-	memset(dma_chain, 0, sc->sc_chnsiz);
+	mutex_enter(&sc->sc_lock);
 
 	/* Setup DMA command chain.*/
-	if (cmd->c_data != NULL && (cmd->c_datalen / cmd->c_blklen) > 1) {
-		/* Multi block transfer. */
-		issp_create_dma_cmd_list_multi(sc, dma_chain, cmd);
-	} else if (cmd->c_data != NULL && cmd->c_datalen) {
-		/* Single block transfer. */
-		issp_create_dma_cmd_list_single(sc, dma_chain, cmd);
+	if (cmd->c_data != NULL && cmd->c_datalen) {
+		/* command with data */
+		issp_prepare_data_command(sc, &req, cmd);
 	} else {
 		/* Only command, no data. */
-		issp_create_dma_cmd_list(sc, dma_chain, cmd);
+		issp_prepare_command(sc, &req, cmd);
 	}
 
-	/* Tell DMA controller where it can find just initialized DMA chain. */
-	apbdma_chan_set_chain(sc->sc_dmac, sc->dma_channel, sc->sc_dmamp);
-
-	/* Synchronize command chain before DMA controller accesses it. */
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, 0, sc->sc_chnsiz,
-	    BUS_DMASYNC_PREWRITE);
 
 	sc->sc_state = SSP_STATE_DMA;
 	sc->sc_irq_error = 0;
-	sc->sc_dma_error = 0;
 	cmd->c_error = 0;
 
-	mutex_enter(&sc->sc_lock);
-
-	/* Run DMA command chain. */
-	apbdma_run(sc->sc_dmac, sc->dma_channel);
+	/* Run DMA */
+	if(fdtbus_dma_transfer(sc->dma_channel, &req)) {
+		aprint_error_dev(sc->sc_dev, "dma transfer error\n");
+		goto out;
+	}
 
 	/* Wait DMA to complete. */
 	while (sc->sc_state == SSP_STATE_DMA)
 		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
-
-	mutex_exit(&sc->sc_lock);
-
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, 0, sc->sc_chnsiz,
-	    BUS_DMASYNC_POSTWRITE);
-
-	if (sc->sc_dma_error) {
-		if (sc->sc_dma_error == DMA_IRQ_TERM) {
-			apbdma_chan_reset(sc->sc_dmac, sc->dma_channel);
-			cmd->c_error = sc->sc_dma_error;
-		}
-		else if (sc->sc_dma_error == DMA_IRQ_BUS_ERROR) {
-			aprint_error_dev(sc->sc_dev, "DMA_IRQ_BUS_ERROR: %d\n",
-			    sc->sc_irq_error);
-			cmd->c_error = sc->sc_dma_error;
-		}
-	}
 
 	if (sc->sc_irq_error) {
 		/* Do not log RESP_TIMEOUT_IRQ error if bus width is 0 as it is
@@ -571,10 +429,8 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		}
 	}
 
-	bus_dmamap_unload(sc->sc_dmat, sc->sc_dmamp);
-dmamem_unmap:
-	bus_dmamem_unmap(sc->sc_dmat, dma_chain, sc->sc_chnsiz);
 out:
+	mutex_exit(&sc->sc_lock);
 
 	return;
 }
@@ -734,32 +590,19 @@ out:
 /*
  * IRQ from DMA.
  */
-static int
+static void
 issp_dma_intr(void *arg)
 {
 	issp_softc_t sc = arg;
-	unsigned int dma_err;
-
-	dma_err = apbdma_intr_status(sc->sc_dmac, sc->dma_channel);
-
-	if (dma_err) {
-		apbdma_ack_error_intr(sc->sc_dmac, sc->dma_channel);
-	} else {
-		apbdma_ack_intr(sc->sc_dmac, sc->dma_channel);
-	}
 
 	mutex_enter(&sc->sc_lock);
-
-	sc->sc_dma_error = dma_err;
+	
 	sc->sc_state = SSP_STATE_IDLE;
 
 	/* Signal thread that interrupt was handled. */
 	cv_signal(&sc->sc_intr_cv);
 
 	mutex_exit(&sc->sc_lock);
-
-	/* Return 1 to acknowledge IRQ. */
-	return 1;
 }
 
 /*
@@ -778,7 +621,8 @@ issp_error_intr(void *arg)
 	sc->sc_irq_error =
 	    SSP_RD(sc, HW_SSP_CTRL1) & HW_SSP_CTRL1_IRQ_MASK;
 
-	issp_ack_intr(sc);
+	/* Acknowledge all IRQ's. */
+	SSP_WR(sc, HW_SSP_CTRL1_CLR, HW_SSP_CTRL1_IRQ_MASK);
 
 	mutex_exit(&sc->sc_lock);
 
@@ -787,223 +631,88 @@ issp_error_intr(void *arg)
 }
 
 /*
- * Acknowledge SSP error IRQ.
+ * Set up a dma transfer for a block with data.
  */
 static void
-issp_ack_intr(struct issp_softc *sc)
-{
-
-	/* Acknowledge all IRQ's. */
-	SSP_WR(sc, HW_SSP_CTRL1_CLR, HW_SSP_CTRL1_IRQ_MASK);
-
-	return;
-}
-
-/*
- * Set up multi block DMA transfer.
- */
-static void
-issp_create_dma_cmd_list_multi(issp_softc_t sc, void *dma_chain,
+issp_prepare_data_command(issp_softc_t sc, struct fdtbus_dma_req *req,
     struct sdmmc_command *cmd)
 {
-	apbdma_command_t dma_cmd;
-	int blocks;
-	int nblk;
+	int block_count = cmd->c_datalen / cmd->c_blklen;
 
-	blocks = cmd->c_datalen / cmd->c_blklen;
-	nblk = 0;
-	dma_cmd = dma_chain;
+	/* prepare DMA request */
+	req->dreq_segs = cmd->c_dmamap->dm_segs;
+	req->dreq_nsegs = cmd->c_dmamap->dm_nsegs;
+	req->dreq_block_irq = 1;
+	req->dreq_block_multi = 0;
+	req->dreq_datalen = 3;
+	req->dreq_data = sc->pio_words;
 
-	/* HEAD */
-	apbdma_cmd_buf(&dma_cmd[nblk], cmd->c_blklen * nblk, cmd->c_dmamap);
-	apbdma_cmd_chain(&dma_cmd[nblk], &dma_cmd[nblk+1], dma_chain,
-	    sc->sc_dmamp);
-
-	dma_cmd[nblk].control =
-	    __SHIFTIN(cmd->c_blklen, APBDMA_CMD_XFER_COUNT) |
-	    __SHIFTIN(3, APBDMA_CMD_CMDPIOWORDS) | APBDMA_CMD_HALTONTERMINATE |
-	    APBDMA_CMD_CHAIN;
-
-	if (!ISSET(cmd->c_flags, SCF_RSP_CRC)) {
-		dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |=
-		    HW_SSP_CTRL0_IGNORE_CRC;
-	}
-
-	dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_DATA_XFER |
-	    __SHIFTIN(sc->sc_bus_width, HW_SSP_CTRL0_BUS_WIDTH) |
-	    HW_SSP_CTRL0_WAIT_FOR_IRQ |
-	    __SHIFTIN(cmd->c_datalen, HW_SSP_CTRL0_XFER_COUNT);
-
-	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
-		dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |=
-		    HW_SSP_CTRL0_GET_RESP;
-		if (ISSET(cmd->c_flags, SCF_RSP_136)) {
-			dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |=
-			    HW_SSP_CTRL0_LONG_RESP;
-		}
-	}
-
-	dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_ENABLE;
-
-	dma_cmd[nblk].pio_words[PIO_WORD_CMD0] =
-	    __SHIFTIN(ffs(cmd->c_blklen) - 1, HW_SSP_CMD0_BLOCK_SIZE) |
-	    __SHIFTIN(blocks - 1, HW_SSP_CMD0_BLOCK_COUNT) |
-	    __SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
-
-	dma_cmd[nblk].pio_words[PIO_WORD_CMD1] = cmd->c_arg;
-
-	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-		dma_cmd[nblk].control |=
-		    __SHIFTIN(APBDMA_CMD_DMA_WRITE, APBDMA_CMD_COMMAND);
-		dma_cmd[nblk].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_READ;
-	} else {
-		dma_cmd[nblk].control |=
-		    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-	}
-
-	nblk++;
-
-	/* BODY: Build commands for blocks between head and tail, if any. */
-	for (; nblk < blocks - 1; nblk++) {
-
-		apbdma_cmd_buf(&dma_cmd[nblk], cmd->c_blklen * nblk,
-		    cmd->c_dmamap);
-
-		apbdma_cmd_chain(&dma_cmd[nblk], &dma_cmd[nblk+1], dma_chain,
-		    sc->sc_dmamp);
-
-		dma_cmd[nblk].control =
-		    __SHIFTIN(cmd->c_blklen, APBDMA_CMD_XFER_COUNT) |
-		    APBDMA_CMD_HALTONTERMINATE | APBDMA_CMD_CHAIN;
-
-		if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-			dma_cmd[nblk].control |=
-			    __SHIFTIN(APBDMA_CMD_DMA_WRITE,
-				APBDMA_CMD_COMMAND);
-		} else {
-			dma_cmd[nblk].control |=
-			    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-		}
-	}
-
-	/* TAIL
-	 *
-	 * TODO: Send CMD12/STOP with last DMA command to support
-	 * SMC_CAPS_AUTO_STOP.
-	 */
-	apbdma_cmd_buf(&dma_cmd[nblk], cmd->c_blklen * nblk, cmd->c_dmamap);
-	/* next = NULL */
-	dma_cmd[nblk].control =
-	    __SHIFTIN(cmd->c_blklen, APBDMA_CMD_XFER_COUNT) |
-	    APBDMA_CMD_HALTONTERMINATE | APBDMA_CMD_WAIT4ENDCMD |
-	    APBDMA_CMD_SEMAPHORE | APBDMA_CMD_IRQONCMPLT;
-
-	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-		dma_cmd[nblk].control |= __SHIFTIN(APBDMA_CMD_DMA_WRITE,
-		    APBDMA_CMD_COMMAND);
-	} else {
-		dma_cmd[nblk].control |= __SHIFTIN(APBDMA_CMD_DMA_READ,
-		    APBDMA_CMD_COMMAND);
-	}
-
-	return;
-}
-
-/*
- * Set up single block DMA transfer.
- */
-static void
-issp_create_dma_cmd_list_single(issp_softc_t sc, void *dma_chain,
-    struct sdmmc_command *cmd)
-{
-	apbdma_command_t dma_cmd;
-
-	dma_cmd = dma_chain;
-
-	dma_cmd[0].control = __SHIFTIN(cmd->c_datalen, APBDMA_CMD_XFER_COUNT) |
-	    __SHIFTIN(3, APBDMA_CMD_CMDPIOWORDS) |
-	    APBDMA_CMD_HALTONTERMINATE | APBDMA_CMD_WAIT4ENDCMD |
-	    APBDMA_CMD_SEMAPHORE | APBDMA_CMD_IRQONCMPLT;
-
-	/* Transfer single block to the beginning of the DMA buffer. */
-	apbdma_cmd_buf(&dma_cmd[0], 0, cmd->c_dmamap);
-
-	if (!ISSET(cmd->c_flags, SCF_RSP_CRC)) {
-		dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
-		    HW_SSP_CTRL0_IGNORE_CRC;
-	}
-
-	dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
+	/* prepare CTRL0 register*/
+	sc->pio_words[PIO_WORD_CTRL0] =
 	    HW_SSP_CTRL0_DATA_XFER |
 	    __SHIFTIN(sc->sc_bus_width, HW_SSP_CTRL0_BUS_WIDTH) |
 	    HW_SSP_CTRL0_WAIT_FOR_IRQ |
-	    __SHIFTIN(cmd->c_datalen, HW_SSP_CTRL0_XFER_COUNT);
-
+	    __SHIFTIN(cmd->c_datalen, HW_SSP_CTRL0_XFER_COUNT) |
+	    HW_SSP_CTRL0_ENABLE;
+	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
+		req->dreq_dir = FDT_DMA_READ;
+		sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_READ;
+	} else {
+		req->dreq_dir = FDT_DMA_WRITE;
+	}
+	if (!ISSET(cmd->c_flags, SCF_RSP_CRC)) {
+		sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_IGNORE_CRC;
+	}
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
-		dma_cmd[0].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_GET_RESP;
+		sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_GET_RESP;
 		if (ISSET(cmd->c_flags, SCF_RSP_136)) {
-			dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
-			    HW_SSP_CTRL0_LONG_RESP;
+			sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_LONG_RESP;
 		}
 	}
 
-	dma_cmd[0].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_ENABLE;
-
-	dma_cmd[0].pio_words[PIO_WORD_CMD0] =
+	/* prepare CMD0 register */
+	sc->pio_words[PIO_WORD_CMD0] =
 	    HW_SSP_CMD0_APPEND_8CYC |
+	    __SHIFTIN(ffs(cmd->c_blklen) - 1, HW_SSP_CMD0_BLOCK_SIZE) |
+	    __SHIFTIN(block_count - 1, HW_SSP_CMD0_BLOCK_COUNT) |
 	    __SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
-	dma_cmd[0].pio_words[PIO_WORD_CMD1] = cmd->c_arg;
 
-	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-		dma_cmd[0].control |=
-		    __SHIFTIN(APBDMA_CMD_DMA_WRITE, APBDMA_CMD_COMMAND);
-		dma_cmd[0].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_READ;
-	} else {
-		dma_cmd[0].control |=
-		    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-	}
-
-	return;
+	/* prepare CMD1 register */
+	sc->pio_words[PIO_WORD_CMD1] = cmd->c_arg;
 }
 
 /*
- * Do DMA PIO (issue CMD). No block transfers.
+ * Setup a dma transfer for a command without data (PIO only)
  */
 static void
-issp_create_dma_cmd_list(issp_softc_t sc, void *dma_chain,
+issp_prepare_command(issp_softc_t sc, struct fdtbus_dma_req *req,
     struct sdmmc_command *cmd)
 {
-	apbdma_command_t dma_cmd;
+	/* prepare DMA */
+	req->dreq_nsegs = 0;
+	req->dreq_block_irq = 1;
+	req->dreq_block_multi = 0;
+	req->dreq_dir = FDT_DMA_NO_XFER;
+	req->dreq_datalen = 3;
+	req->dreq_data = sc->pio_words;
 
-	dma_cmd = dma_chain;
-
-	dma_cmd[0].control = __SHIFTIN(3, APBDMA_CMD_CMDPIOWORDS) |
-	    APBDMA_CMD_HALTONTERMINATE | APBDMA_CMD_WAIT4ENDCMD |
-	    APBDMA_CMD_SEMAPHORE | APBDMA_CMD_IRQONCMPLT |
-	    __SHIFTIN(APBDMA_CMD_NO_DMA_XFER, APBDMA_CMD_COMMAND);
-
-	if (!ISSET(cmd->c_flags, SCF_RSP_CRC)) {
-		dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
-		    HW_SSP_CTRL0_IGNORE_CRC;
-	}
-
-	dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
+	/* prepare CTRL0 register*/
+	sc->pio_words[PIO_WORD_CTRL0] =
 	    __SHIFTIN(sc->sc_bus_width, HW_SSP_CTRL0_BUS_WIDTH) |
-	    HW_SSP_CTRL0_WAIT_FOR_IRQ;
-
+	    HW_SSP_CTRL0_WAIT_FOR_IRQ | HW_SSP_CTRL0_ENABLE;
+	if (!ISSET(cmd->c_flags, SCF_RSP_CRC)) {
+		sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_IGNORE_CRC;
+	}
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
-		dma_cmd[0].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_GET_RESP;
+		sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_GET_RESP;
 		if (ISSET(cmd->c_flags, SCF_RSP_136)) {
-			dma_cmd[0].pio_words[PIO_WORD_CTRL0] |=
-			    HW_SSP_CTRL0_LONG_RESP;
+			sc->pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_LONG_RESP;
 		}
 	}
 
-	dma_cmd[0].pio_words[PIO_WORD_CTRL0] |= HW_SSP_CTRL0_ENABLE;
+	/* prepare CMD0 register */
+	sc->pio_words[PIO_WORD_CMD0] = __SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
 
-	dma_cmd[0].pio_words[PIO_WORD_CMD0] =
-		__SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
-	dma_cmd[0].pio_words[PIO_WORD_CMD1] = cmd->c_arg;
-
-	return;
+	/* prepare CMD1 register */
+	sc->pio_words[PIO_WORD_CMD1] = cmd->c_arg;
 }

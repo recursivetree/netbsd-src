@@ -36,34 +36,27 @@
 #include <sys/device.h>
 #include <sys/errno.h>
 
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/imx/imx23_clkctrlreg.h>
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct clkctrl_softc {
+struct clkctrl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
-} *clkctrl_softc_t;
+};
 
 static int	clkctrl_match(device_t, cfdata_t, void *);
 static void	clkctrl_attach(device_t, device_t, void *);
-static int	clkctrl_activate(device_t, enum devact);
 
 static void     clkctrl_init(struct clkctrl_softc *);
 
-static clkctrl_softc_t _sc = NULL;
+static struct clkctrl_softc *_sc = NULL;
 
-CFATTACH_DECL3_NEW(imx23clkctrl,
-        sizeof(struct clkctrl_softc),
-        clkctrl_match,
-        clkctrl_attach,
-        NULL,
-        clkctrl_activate,
-        NULL,
-        NULL,
-        0
-);
+CFATTACH_DECL_NEW(imx23clkctrl, sizeof(struct clkctrl_softc),
+		  clkctrl_match, clkctrl_attach, NULL, NULL);
 
 #define CLKCTRL_RD(sc, reg)                                                 \
         bus_space_read_4(sc->sc_iot, sc->sc_hdl, (reg))
@@ -72,55 +65,46 @@ CFATTACH_DECL3_NEW(imx23clkctrl,
 
 #define CLKCTRL_SOFT_RST_LOOP 455 /* At least 1 us ... */
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-clkctrl" },
+	{ .compat = "fsl,clkctrl" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 clkctrl_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if ((aa->aa_addr == HW_CLKCTRL_BASE) &&
-	    (aa->aa_size == HW_CLKCTRL_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 clkctrl_attach(device_t parent, device_t self, void *aux)
 {
-	struct clkctrl_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
-	static int clkctrl_attached = 0;
+	struct clkctrl_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
+	sc->sc_iot = faa->faa_bst;
 
-	if (clkctrl_attached) {
-		aprint_error_dev(sc->sc_dev, "already attached\n");
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
 		return;
 	}
-
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
-		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
-
-
-	clkctrl_init(sc);
 
 	aprint_normal("\n");
 
-	clkctrl_attached = 1;
+	clkctrl_init(sc);
 
 	return;
-}
-
-static int
-clkctrl_activate(device_t self, enum devact act)
-{
-
-	return EOPNOTSUPP;
 }
 
 static void

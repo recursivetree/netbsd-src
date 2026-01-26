@@ -71,7 +71,7 @@ file	arch/arm/imx/imx23_pinctrl.c	imx23pctl
 
 # Clock Control
 device	imx23clkctrl
-attach	imx23clkctrl at apbx
+attach	imx23clkctrl at fdt
 file	arch/arm/imx/imx23_clkctrl.c	imx23clkctrl
 
 # USB host controller

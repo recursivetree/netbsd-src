@@ -37,29 +37,26 @@
 #include <sys/errno.h>
 #include <sys/gpio.h>
 
+#include <dev/fdt/fdtvar.h>
 #include <dev/gpio/gpiovar.h>
 
 #include <arm/imx/imx23_pinctrlreg.h>
 #include <arm/imx/imx23_pinctrlvar.h>
 #include <arm/imx/imx23var.h>
 
-#define GPIO_PINS 96
+#define IMX23_NUM_GPIO_PINS 96
 
-typedef struct imx23_pinctrl_softc {
+struct imx23_pinctrl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
 	struct gpio_chipset_tag gc;
-	gpio_pin_t pins[GPIO_PINS];
-} *imx23_pinctrl_softc_t;
+	gpio_pin_t pins[IMX23_NUM_GPIO_PINS];
+};
 
 static int	imx23_pinctrl_match(device_t, cfdata_t, void *);
 static void	imx23_pinctrl_attach(device_t, device_t, void *);
-static int	imx23_pinctrl_activate(device_t, enum devact);
 
-#if notyet
-static void     imx23_pinctrl_reset(struct imx23_pinctrl_softc *);
-#endif
 static void     imx23_pinctrl_init(struct imx23_pinctrl_softc *);
 
 static	int	imx23_pinctrl_gp_gc_open(void *, device_t);
@@ -68,18 +65,10 @@ static	int	imx23_pinctrl_gp_pin_read(void *, int);
 static	void	imx23_pinctrl_gp_pin_write(void *, int, int);
 static	void	imx23_pinctrl_gp_pin_ctl(void *, int, int);
 
-static imx23_pinctrl_softc_t _sc = NULL;
+static struct imx23_pinctrl_softc *_sc = NULL;
 
-CFATTACH_DECL3_NEW(imx23pctl,
-        sizeof(struct imx23_pinctrl_softc),
-        imx23_pinctrl_match,
-        imx23_pinctrl_attach,
-        NULL,
-        imx23_pinctrl_activate,
-        NULL,
-        NULL,
-        0
-);
+CFATTACH_DECL_NEW(imx23pctl, sizeof(struct imx23_pinctrl_softc),
+		  imx23_pinctrl_match, imx23_pinctrl_attach, NULL, NULL);
 
 #define GPIO_PIN_CAP (GPIO_PIN_INPUT | GPIO_PIN_OUTPUT | GPIO_PIN_INOUT | \
 		GPIO_PIN_PULLUP | GPIO_PIN_SET)
@@ -87,7 +76,7 @@ CFATTACH_DECL3_NEW(imx23pctl,
 /*
  * Supported capabilities for each GPIO pin.
  */
-const static int pin_caps[GPIO_PINS] = {
+const static int pin_caps[IMX23_NUM_GPIO_PINS] = {
 	/*
 	 * HW_PINCTRL_MUXSEL0
 	 */
@@ -365,42 +354,39 @@ const static int pin_caps[GPIO_PINS] = {
 
 #define PINCTRL_SOFT_RST_LOOP 455 /* At least 1 us ... */
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-pinctrl" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 imx23_pinctrl_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if ((aa->aa_addr == HW_PINCTRL_BASE) &&
-	    (aa->aa_size == HW_PINCTRL_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 {
-	struct imx23_pinctrl_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
-	static int imx23_pinctrl_attached = 0;
+	struct imx23_pinctrl_softc *const sc = device_private(self);
+	struct fdt_attach_args *const faa = aux;
+	const int phandle = faa->faa_phandle;
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
+	sc->sc_iot = faa->faa_bst;
 
-	if (imx23_pinctrl_attached) {
-		aprint_error_dev(sc->sc_dev, "already attached\n");
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
 		return;
 	}
-
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl)) {
-		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
-
-#if notyet
-	imx23_pinctrl_reset(sc);
-#endif
 
 	imx23_pinctrl_init(sc);
 
@@ -408,11 +394,9 @@ imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 
 	/* Set pin capabilities. */
 	int i;
-	for(i = 0; i < GPIO_PINS; i++) {
+	for(i = 0; i < IMX23_NUM_GPIO_PINS; i++) {
 		sc->pins[i].pin_caps = pin_caps[i];
 	}
-
-	imx23_pinctrl_attached = 1;
 
 	sc->gc.gp_cookie = sc;
 	sc->gc.gp_gc_open = imx23_pinctrl_gp_gc_open;
@@ -423,19 +407,12 @@ imx23_pinctrl_attach(device_t parent, device_t self, void *aux)
 
 	struct gpiobus_attach_args gpiobus_aa;
 	gpiobus_aa.gba_gc = &sc->gc;
-	gpiobus_aa.gba_npins = GPIO_PINS;
+	gpiobus_aa.gba_npins = IMX23_NUM_GPIO_PINS;
 	gpiobus_aa.gba_pins = sc->pins;
 
-	config_found(self, &gpiobus_aa, gpiobus_print, CFARGS_NONE);
+	config_found(sc->sc_dev, &gpiobus_aa, gpiobus_print, CFARGS_NONE);
 
 	return;
-}
-
-static int
-imx23_pinctrl_activate(device_t self, enum devact act)
-{
-
-	return EOPNOTSUPP;
 }
 
 static void
@@ -444,52 +421,6 @@ imx23_pinctrl_init(struct imx23_pinctrl_softc *sc)
 	_sc = sc;
 	return;
 }
-
-#if notyet
-/*
- * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
- */
-static void
-imx23_pinctrl_reset(struct imx23_pinctrl_softc *sc)
-{
-        unsigned int loop;
-
-        /* Prepare for soft-reset by making sure that SFTRST is not currently
-         * asserted. Also clear CLKGATE so we can wait for its assertion below.
-         */
-        PINCTRL_WR(sc, HW_PINCTRL_CTRL_CLR, HW_PINCTRL_CTRL_SFTRST);
-
-        /* Wait at least a microsecond for SFTRST to deassert. */
-        loop = 0;
-        while ((PINCTRL_RD(sc, HW_PINCTRL_CTRL) & HW_PINCTRL_CTRL_SFTRST) ||
-            (loop < PINCTRL_SOFT_RST_LOOP))
-                loop++;
-
-        /* Clear CLKGATE so we can wait for its assertion below. */
-        PINCTRL_WR(sc, HW_PINCTRL_CTRL_CLR, HW_PINCTRL_CTRL_CLKGATE);
-
-        /* Soft-reset the block. */
-        PINCTRL_WR(sc, HW_PINCTRL_CTRL_SET, HW_PINCTRL_CTRL_SFTRST);
-
-        /* Wait until clock is in the gated state. */
-        while (!(PINCTRL_RD(sc, HW_PINCTRL_CTRL) & HW_PINCTRL_CTRL_CLKGATE));
-
-        /* Bring block out of reset. */
-        PINCTRL_WR(sc, HW_PINCTRL_CTRL_CLR, HW_PINCTRL_CTRL_SFTRST);
-
-        loop = 0;
-        while ((PINCTRL_RD(sc, HW_PINCTRL_CTRL) & HW_PINCTRL_CTRL_SFTRST) ||
-            (loop < PINCTRL_SOFT_RST_LOOP))
-                loop++;
-
-        PINCTRL_WR(sc, HW_PINCTRL_CTRL_CLR, HW_PINCTRL_CTRL_CLKGATE);
-
-        /* Wait until clock is in the NON-gated state. */
-        while (PINCTRL_RD(sc, HW_PINCTRL_CTRL) & HW_PINCTRL_CTRL_CLKGATE);
-
-        return;
-}
-#endif
 
 /*
  * Enable external USB transceiver/HUB.
@@ -530,7 +461,7 @@ static	int
 imx23_pinctrl_gp_pin_read(void *cookie, int pin)
 {
 	int value;
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 
 	if (PINCTRL_RD(sc, PIN2DIN_REG(pin)) & PIN2DIN_MASK(pin))
 		value = 1;
@@ -543,7 +474,7 @@ imx23_pinctrl_gp_pin_read(void *cookie, int pin)
 static	void
 imx23_pinctrl_gp_pin_write(void *cookie, int pin, int value)
 {
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 
 	if (value)
 		PINCTRL_WR(sc, PIN2DOUT_SET_REG(pin), PIN2DOUT_MASK(pin));
@@ -559,7 +490,7 @@ imx23_pinctrl_gp_pin_write(void *cookie, int pin, int value)
 static	void
 imx23_pinctrl_gp_pin_ctl(void *cookie, int pin, int flags)
 {
-	imx23_pinctrl_softc_t sc = (imx23_pinctrl_softc_t) cookie;
+	struct imx23_pinctrl_softc *sc = (struct imx23_pinctrl_softc *) cookie;
 	uint32_t tmpr;
 
 	/* Enable GPIO pin. */

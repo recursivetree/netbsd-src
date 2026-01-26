@@ -75,9 +75,9 @@ attach	imx23clkctrl at fdt
 file	arch/arm/imx/imx23_clkctrl.c	imx23clkctrl
 
 # USB host controller
-device	imxusbc {unit, irq} : bus_space_generic
-attach	imxusbc at ahb
-file	arch/arm/imx/imx23_usb.c	imxusbc
+device	imxusbc { [unit=-1], [irq=-1] } : bus_space_generic
+attach	imxusbc at fdt
+file	arch/arm/imx/imx23_usbc.c	imxusbc
 
 # EHCI
 attach	ehci at imxusbc with imxehci

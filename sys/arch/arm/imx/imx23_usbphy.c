@@ -36,32 +36,25 @@
 #include <sys/device.h>
 #include <sys/errno.h>
 
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/imx/imx23_usbphyreg.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct usbphy_softc {
+struct usbphy_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
-} *usbphy_softc_t;
+};
 
 static int	usbphy_match(device_t, cfdata_t, void *);
 static void	usbphy_attach(device_t, device_t, void *);
-static int	usbphy_activate(device_t, enum devact);
 
 static void     usbphy_reset(struct usbphy_softc *);
 static void     usbphy_init(struct usbphy_softc *);
 
-CFATTACH_DECL3_NEW(imx23usbphy,
-        sizeof(struct usbphy_softc),
-        usbphy_match,
-        usbphy_attach,
-        NULL,
-        usbphy_activate,
-        NULL,
-        NULL,
-        0
-);
+CFATTACH_DECL_NEW(imx23usbphy, sizeof(struct usbphy_softc),
+		  usbphy_match, usbphy_attach, NULL, NULL);
 
 #define PHY_RD(sc, reg)                                                 \
         bus_space_read_4(sc->sc_iot, sc->sc_hdl, (reg))
@@ -70,37 +63,38 @@ CFATTACH_DECL3_NEW(imx23usbphy,
 
 #define USBPHY_SOFT_RST_LOOP 455   /* At least 1 us ... */
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-usbphy" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 usbphy_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if ((aa->aa_addr == HW_USBPHY_BASE) && (aa->aa_size == HW_USBPHY_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 usbphy_attach(device_t parent, device_t self, void *aux)
 {
-	struct usbphy_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
-	static int usbphy_attached = 0;
+	struct usbphy_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
 	uint32_t phy_version;
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
+	sc->sc_iot = faa->faa_bst;
 
-	if (usbphy_attached) {
-		aprint_error_dev(sc->sc_dev, "already attached\n");
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
 		return;
 	}
-
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
-		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
 
@@ -112,17 +106,9 @@ usbphy_attach(device_t parent, device_t self, void *aux)
             __SHIFTOUT(phy_version, HW_USBPHY_VERSION_MAJOR),
             __SHIFTOUT(phy_version, HW_USBPHY_VERSION_MINOR));
 
-	usbphy_attached = 1;
-
 	return;
 }
 
-static int
-usbphy_activate(device_t self, enum devact act)
-{
-
-	return EOPNOTSUPP;
-}
 
 /*
  * Reset the USB PHY.

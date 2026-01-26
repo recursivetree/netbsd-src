@@ -56,7 +56,7 @@ file	arch/arm/imx/imx23_apbdma.c	imx23apbdma
 
 # USB PHY
 device	imx23usbphy
-attach	imx23usbphy at apbx
+attach	imx23usbphy at fdt
 file	arch/arm/imx/imx23_usbphy.c	imx23usbphy
 
 # Digital Control

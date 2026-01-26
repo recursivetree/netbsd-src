@@ -87,6 +87,9 @@ pseudo-device 	tprof
 com* 		at fdt?	pass 4		# UART
 plcom* 		at fdt?	pass 4		# ARM PL011 UART
 
+# Various
+imx23digctl* at fdt? pass 1		# i.MX23 digctl block
+
 # Audio
 audio* 		at audiobus?
 

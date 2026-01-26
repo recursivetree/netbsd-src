@@ -37,19 +37,20 @@
 #include <sys/errno.h>
 #include <sys/timetc.h>
 
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/imx/imx23_digctlreg.h>
 #include <arm/imx/imx23_digctlvar.h>
 #include <arm/imx/imx23var.h>
 
-typedef struct digctl_softc {
+struct digctl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
-} *digctl_softc_t;
+};
 
 static int	digctl_match(device_t, cfdata_t, void *);
 static void	digctl_attach(device_t, device_t, void *);
-static int	digctl_activate(device_t, enum devact);
 
 static void     digctl_reset(struct digctl_softc *);
 static void     digctl_init(struct digctl_softc *);
@@ -57,18 +58,10 @@ static void     digctl_init(struct digctl_softc *);
 /* timecounter. */
 static u_int digctl_tc_get_timecount(struct timecounter *);
 
-static digctl_softc_t _sc = NULL;
+static struct digctl_softc *_sc = NULL;
 
-CFATTACH_DECL3_NEW(imx23digctl,
-        sizeof(struct digctl_softc),
-        digctl_match,
-        digctl_attach,
-        NULL,
-        digctl_activate,
-        NULL,
-        NULL,
-        0
-);
+CFATTACH_DECL_NEW(imx23digctl, sizeof(struct digctl_softc),
+		  digctl_match, digctl_attach, NULL, NULL);
 
 static struct timecounter tc_useconds;
 
@@ -77,43 +70,44 @@ static struct timecounter tc_useconds;
 #define DCTL_WR(sc, reg, val)                                            \
         bus_space_write_4(sc->sc_iot, sc->sc_hdl, (reg), (val))
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-digctl" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 digctl_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if ((aa->aa_addr == HW_DIGCTL_BASE) && (aa->aa_size == HW_DIGCTL_SIZE))
-		return 1;
-
-	return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 digctl_attach(device_t parent, device_t self, void *aux)
 {
-	struct digctl_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
-	static int digctl_attached = 0;
+	struct digctl_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
+	sc->sc_iot = faa->faa_bst;
 
-	if (digctl_attached) {
-		aprint_error_dev(sc->sc_dev, "already attached\n");
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
+		return;
+	}
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
 		return;
 	}
 
-	if (bus_space_map(sc->sc_iot, aa->aa_addr, aa->aa_size, 0,
-	    &sc->sc_hdl))
-	{
-		aprint_error_dev(sc->sc_dev, "Unable to map bus space\n");
-		return;
-	}
+	aprint_normal("\n");
 
 	digctl_reset(sc);
 	digctl_init(sc);
-
-	aprint_normal("\n");
 
 	/*
 	 * Setup timecounter to use digctl microseconds counter.
@@ -130,16 +124,7 @@ digctl_attach(device_t parent, device_t self, void *aux)
 
 	tc_init(&tc_useconds);
 
-	digctl_attached = 1;
-
 	return;
-}
-
-static int
-digctl_activate(device_t self, enum devact act)
-{
-
-	return EOPNOTSUPP;
 }
 
 /*

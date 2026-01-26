@@ -61,7 +61,7 @@ file	arch/arm/imx/imx23_usbphy.c	imx23usbphy
 
 # Digital Control
 device	imx23digctl
-attach	imx23digctl at apbh
+attach	imx23digctl at fdt
 file	arch/arm/imx/imx23_digctl.c	imx23digctl
 
 # PIN Control

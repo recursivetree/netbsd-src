@@ -49,8 +49,6 @@
 #include <arm/imx/imxusbvar.h>
 #include <arm/imx/imxusbreg.h>
 #include <arm/imx/imx23var.h>
-#include <arm/imx/imx23_clkctrlvar.h>
-#include <arm/imx/imx23_digctlvar.h>
 
 struct imx23_imxusbc_softc {
 	struct imxusbc_softc sc_imxusbc; /* Must be first */
@@ -111,9 +109,6 @@ imx23usbc_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	fdtbus_regulator_enable(vbus_reg);
-
-	/* USB clock on. */
-	digctl_usb_clkgate(0);
 
 	sc->sc_imxusbc.sc_ehci_size = IMXUSB_EHCI_SIZE;
 	sc->sc_imxusbc.sc_ehci_offset = IMXUSB_EHCI_SIZE;

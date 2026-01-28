@@ -39,7 +39,6 @@
 #include <dev/fdt/fdtvar.h>
 
 #include <arm/imx/imx23_clkctrlreg.h>
-#include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23var.h>
 
 struct clkctrl_softc {
@@ -50,10 +49,6 @@ struct clkctrl_softc {
 
 static int	clkctrl_match(device_t, cfdata_t, void *);
 static void	clkctrl_attach(device_t, device_t, void *);
-
-static void     clkctrl_init(struct clkctrl_softc *);
-
-static struct clkctrl_softc *_sc = NULL;
 
 CFATTACH_DECL_NEW(imx23clkctrl, sizeof(struct clkctrl_softc),
 		  clkctrl_match, clkctrl_attach, NULL, NULL);
@@ -100,55 +95,13 @@ clkctrl_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	aprint_normal("\n");
-
-	clkctrl_init(sc);
-
-	return;
-}
-
-static void
-clkctrl_init(struct clkctrl_softc *sc)
-{
-	_sc = sc;
-	return;
-}
-
-/*
- * Power up 8-phase PLL outputs for USB PHY
- *
- */
-void
-clkctrl_en_usb(void)
-{
-	struct clkctrl_softc *sc = _sc;
-
-        if (sc == NULL) {
-                aprint_error("clkctrl is not initialized");
-                return;
-        }
-
+	/* Power up 8-phase PLL outputs for USB PHY */
 	CLKCTRL_WR(sc, HW_CLKCTRL_PLLCTRL0_SET,
-	    HW_CLKCTRL_PLLCTRL0_EN_USB_CLKS);
-
-	return;
-}
-
-/*
- * Enable 24MHz clock for the Digital Filter.
- *
- */
-void
-clkctrl_en_filtclk(void)
-{
-	struct clkctrl_softc *sc = _sc;
-
-	if (sc == NULL) {
-		aprint_error("clkctrl is not initialized");
-		return;
-	}
-
+		   HW_CLKCTRL_PLLCTRL0_EN_USB_CLKS);
+	/* Enable 24MHz clock for the audio output. */
 	CLKCTRL_WR(sc, HW_CLKCTRL_XTAL_CLR, HW_CLKCTRL_XTAL_FILT_CLK24M_GATE);
+
+	aprint_normal("\n");
 
 	return;
 }

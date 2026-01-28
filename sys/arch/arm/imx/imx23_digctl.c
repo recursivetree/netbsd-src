@@ -40,7 +40,6 @@
 #include <dev/fdt/fdtvar.h>
 
 #include <arm/imx/imx23_digctlreg.h>
-#include <arm/imx/imx23_digctlvar.h>
 #include <arm/imx/imx23var.h>
 
 struct digctl_softc {
@@ -124,6 +123,9 @@ digctl_attach(device_t parent, device_t self, void *aux)
 
 	tc_init(&tc_useconds);
 
+	/* Enable USB clocks */
+	DCTL_WR(sc, HW_DIGCTL_CTRL_CLR, HW_DIGCTL_CTRL_USB_CLKGATE);
+
 	return;
 }
 
@@ -140,30 +142,6 @@ static void
 digctl_init(struct digctl_softc *sc)
 {
 	_sc = sc;
-	return;
-}
-
-/*
- * Control USB controller clocks.
- */
-void
-digctl_usb_clkgate(int value)
-{
-	struct digctl_softc *sc = _sc;
-
-	if (sc == NULL) {
-		aprint_error("digctl is not initialized");
-		return;
-	}
-
-	if (value) {
-		/* Clocks OFF. */
-		DCTL_WR(sc, HW_DIGCTL_CTRL_SET, HW_DIGCTL_CTRL_USB_CLKGATE);
-	} else {
-		/* Clocks ON. */
-		DCTL_WR(sc, HW_DIGCTL_CTRL_CLR, HW_DIGCTL_CTRL_USB_CLKGATE);
-	}
-
 	return;
 }
 

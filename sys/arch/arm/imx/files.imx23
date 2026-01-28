@@ -90,5 +90,5 @@ file arch/arm/imx/imx23_rtc.c		imx23rtc
 
 # Digital filter: Audio I/O
 device imx23digfilt: audiobus
-attach imx23digfilt at apbx
+attach imx23digfilt at fdt
 file arch/arm/imx/imx23_digfilt.c	imx23digfilt

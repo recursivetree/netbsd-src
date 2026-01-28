@@ -39,19 +39,38 @@
 #include <sys/mutex.h>
 #include <sys/audioio.h>
 #include <sys/mallocvar.h>
+
 #include <dev/audio/audio_if.h>
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/imx/imx23_digfiltreg.h>
-#include <arm/imx/imx23_clkctrlvar.h>
-#include <arm/imx/imx23_apbdmavar.h>
-#include <arm/imx/imx23_icollreg.h>
 #include <arm/imx/imx23var.h>
 
-#include <arm/pic/picvar.h>
+#define DIGFILT_DMA_NSEGS 1
+
+struct digfilt_softc {
+	device_t sc_dev;
+	device_t sc_audiodev;
+	struct audio_format sc_format;
+	bus_space_handle_t sc_aohdl;
+	struct fdtbus_dma *dma_channel;
+	bus_dma_tag_t sc_dmat;
+	bus_dmamap_t sc_dmamp;
+	bus_dma_segment_t sc_ds[DIGFILT_DMA_NSEGS];
+	bus_space_handle_t sc_hdl;
+	bus_space_tag_t	sc_iot;
+	kmutex_t sc_intr_lock;
+	kmutex_t sc_lock;
+	audio_params_t sc_pparam;
+	void *sc_buffer;
+	void *sc_intarg;
+	void (*sc_intr)(void*);
+	uint8_t sc_mute;
+};
 
 /* Autoconf. */
 static int digfilt_match(device_t, cfdata_t, void *);
 static void digfilt_attach(device_t, device_t, void *);
-static int digfilt_activate(device_t, enum devact);
 
 /* Audio driver interface. */
 static int digfilt_query_format(void *, audio_format_query_t *);
@@ -74,12 +93,11 @@ static void digfilt_get_locks(void *, kmutex_t **, kmutex_t **);
 
 /* IRQs */
 static int dac_error_intr(void *);
-static int dac_dma_intr(void *);
+static void dac_dma_intr(void *);
 
 struct digfilt_softc;
 
 /* Audio out. */
-static void *digfilt_ao_alloc_dmachain(void *, size_t);
 static void digfilt_ao_apply_mutes(struct digfilt_softc *);
 static void digfilt_ao_init(struct digfilt_softc *);
 static void digfilt_ao_reset(struct digfilt_softc *);
@@ -90,9 +108,8 @@ static void digfilt_ao_set_rate(struct digfilt_softc *, int);
 static void digfilt_ai_reset(struct digfilt_softc *);
 #endif
 
-#define DIGFILT_DMA_NSEGS 1
-#define DIGFILT_BLOCKSIZE_MAX 4096
-#define DIGFILT_BLOCKSIZE_ROUND 512
+#define DIGFILT_BLOCKSIZE_MAX 8192
+#define DIGFILT_BLOCKSIZE_ROUND 2048
 #define DIGFILT_DMA_CHAIN_LENGTH 3
 #define DIGFILT_DMA_CHANNEL 1
 #define DIGFILT_MUTE_DAC 1
@@ -105,39 +122,8 @@ static void digfilt_ai_reset(struct digfilt_softc *);
 #define AO_WR(sc, reg, val)						\
 	bus_space_write_4(sc->sc_iot, sc->sc_aohdl, (reg), (val))
 
-struct digfilt_softc {
-	device_t sc_dev;
-	device_t sc_audiodev;
-	struct audio_format sc_format;
-	bus_space_handle_t sc_aohdl;
-	apbdma_softc_t sc_dmac;
-	bus_dma_tag_t sc_dmat;
-	bus_dmamap_t sc_dmamp;
-	bus_dmamap_t sc_c_dmamp;
-	bus_dma_segment_t sc_ds[DIGFILT_DMA_NSEGS];
-	bus_dma_segment_t sc_c_ds[DIGFILT_DMA_NSEGS];
-	bus_space_handle_t sc_hdl;
-	kmutex_t sc_intr_lock;
-	bus_space_tag_t	sc_iot;
-	kmutex_t sc_lock;
-	audio_params_t sc_pparam;
-	void *sc_buffer;
-	void *sc_dmachain;
-	void *sc_intarg;
-	void (*sc_intr)(void*);
-	uint8_t sc_mute;
-	uint8_t sc_cmd_index;
-};
-
-CFATTACH_DECL3_NEW(imx23digfilt,
-	sizeof(struct digfilt_softc),
-	digfilt_match,
-	digfilt_attach,
-	NULL,
-	digfilt_activate,
-	NULL,
-	NULL,
-	0);
+CFATTACH_DECL_NEW(imx23digfilt, sizeof(struct digfilt_softc),
+		  digfilt_match, digfilt_attach, NULL, NULL);
 
 static const struct audio_hw_if digfilt_hw_if = {
 	.open = NULL,
@@ -177,88 +163,70 @@ enum {
 	DIGFILT_ENUM_LAST
 };
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "fsl,imx23-audioout" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 digfilt_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct apb_attach_args *aa = aux;
+	struct fdt_attach_args * const faa = aux;
 
-	if (aa->aa_addr == HW_DIGFILT_BASE && aa->aa_size == HW_DIGFILT_SIZE)
-		return 1;
-	else
-		return 0;
+	return of_compatible_match(faa->faa_phandle, compat_data);
 }
 
 static void
 digfilt_attach(device_t parent, device_t self, void *aux)
 {
-	struct apb_softc *sc_parent = device_private(parent);
-	struct digfilt_softc *sc = device_private(self);
-	struct apb_attach_args *aa = aux;
-	static int digfilt_attached = 0;
+	struct digfilt_softc * const sc = device_private(self);
+	struct fdt_attach_args * const faa = aux;
+	const int phandle = faa->faa_phandle;
 	int error;
-	uint32_t v;
-	void *intr;
+	char intrstr[128];
 
 	sc->sc_dev = self;
-	sc->sc_iot = aa->aa_iot;
-	sc->sc_dmat = aa->aa_dmat;
+	sc->sc_iot = faa->faa_bst;
+	sc->sc_dmat = faa->faa_dmat;
 
-	/* This driver requires DMA functionality from the bus.
-	 * Parent bus passes handle to the DMA controller instance. */
-	if (sc_parent->dmac == NULL) {
-		aprint_error_dev(sc->sc_dev, "DMA functionality missing\n");
+	bus_addr_t addr;
+	bus_size_t size;
+	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
+		aprint_error(": couldn't get register address\n");
 		return;
 	}
-	sc->sc_dmac = device_private(sc_parent->dmac);
+	/* Map DIGFILT bus space. */
+	if (bus_space_map(faa->faa_bst, addr, size, 0, &sc->sc_hdl)) {
+		aprint_error(": couldn't map registers\n");
+		return;
+	}
+	/* Map AUDIOOUT subregion from parent bus space. */
+	if (bus_space_subregion(sc->sc_iot, sc->sc_hdl, 0, size,
+				&sc->sc_aohdl)) {
+		aprint_error_dev(sc->sc_dev,
+				 "Unable to submap AUDIOOUT bus space\n");
+		return;
+	}
 
-	if (aa->aa_addr == HW_DIGFILT_BASE && digfilt_attached) {
-		aprint_error_dev(sc->sc_dev, "DIGFILT already attached\n");
+	/* acquire DMA channel */
+	sc->dma_channel = fdtbus_dma_get(phandle,"tx", dac_dma_intr, sc);
+	if(sc->dma_channel == NULL) {
+		aprint_error(": couldn't get dma access\n");
 		return;
 	}
 
 	/* Allocate DMA for audio buffer. */
 	error = bus_dmamap_create(sc->sc_dmat, MAXPHYS, DIGFILT_DMA_NSEGS,
-		MAXPHYS, 0, BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW, &sc->sc_dmamp);
+				  MAXPHYS, 0, BUS_DMA_NOWAIT | BUS_DMA_ALLOCNOW,
+				  &sc->sc_dmamp);
 	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to allocate DMA handle\n");
+		aprint_error_dev(sc->sc_dev, "Unable to allocate DMA handle\n");
 		return;
 	}
-
-	/* Allocate for DMA chain. */
-	error = bus_dmamap_create(sc->sc_dmat, MAXPHYS, DIGFILT_DMA_NSEGS,
-		MAXPHYS, 0, BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW, &sc->sc_c_dmamp);
-	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to allocate DMA handle\n");
-		return;
-	}
-
-	/* Map DIGFILT bus space. */
-	if (bus_space_map(sc->sc_iot, HW_DIGFILT_BASE, HW_DIGFILT_SIZE, 0,
-	    &sc->sc_hdl)) {
-		aprint_error_dev(sc->sc_dev,
-		    "Unable to map DIGFILT bus space\n");
-		return;
-	}
-
-	/* Map AUDIOOUT subregion from parent bus space. */
-	if (bus_space_subregion(sc->sc_iot, sc->sc_hdl,
-	    (HW_AUDIOOUT_BASE - HW_DIGFILT_BASE), HW_AUDIOOUT_SIZE,
-	    &sc->sc_aohdl)) {
-		aprint_error_dev(sc->sc_dev,
-			"Unable to submap AUDIOOUT bus space\n");
-		return;
-	}
-
-	/* Enable clocks to the DIGFILT block. */
-	clkctrl_en_filtclk();
-	delay(10);
 
 	digfilt_ao_reset(sc);	/* Reset AUDIOOUT. */
-	/* Not yet: digfilt_ai_reset(sc); */
 
-	v = AO_RD(sc, HW_AUDIOOUT_VERSION);
+	uint32_t v = AO_RD(sc, HW_AUDIOOUT_VERSION);
 	aprint_normal(": DIGFILT Block v%" __PRIuBIT ".%" __PRIuBIT
 		".%" __PRIuBIT "\n",
 		__SHIFTOUT(v, HW_AUDIOOUT_VERSION_MAJOR),
@@ -294,42 +262,22 @@ digfilt_attach(device_t parent, device_t self, void *aux)
 	sc->sc_mute = DIGFILT_MUTE_LINE;
 	digfilt_ao_apply_mutes(sc);
 
-	/* Allocate DMA safe memory for the DMA chain. */
-	sc->sc_dmachain = digfilt_ao_alloc_dmachain(sc,
-		sizeof(struct apbdma_command) * DIGFILT_DMA_CHAIN_LENGTH);
-	if (sc->sc_dmachain == NULL) {
-		aprint_error_dev(self, "digfilt_ao_alloc_dmachain failed\n");
+	/* establish error interrupt */
+	if (!fdtbus_intr_str(phandle, 0, intrstr, sizeof(intrstr))) {
+		aprint_error(": failed to decode interrupt\n");
+		return;
+	}
+	void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_SCHED, IST_LEVEL,
+					       dac_error_intr, sc,
+					       device_xname(self));
+	if (ih == NULL) {
+		aprint_error_dev(self, "couldn't establish error interrupt\n");
 		return;
 	}
 
-	intr = intr_establish(IRQ_DAC_DMA, IPL_SCHED, IST_LEVEL, dac_dma_intr,
-			sc);
-	if (intr == NULL) {
-		aprint_error_dev(sc->sc_dev,
-			"Unable to establish IRQ for DAC_DMA\n");
-		return;
-	}
-
-	intr = intr_establish(IRQ_DAC_ERROR, IPL_SCHED, IST_LEVEL,
-		dac_error_intr, sc);
-	if (intr == NULL) {
-		aprint_error_dev(sc->sc_dev,
-			"Unable to establish IRQ for DAC_ERROR\n");
-		return;
-	}
-
-	/* Initialize DMA channel. */
-	apbdma_chan_init(sc->sc_dmac, DIGFILT_DMA_CHANNEL);
-
-	digfilt_attached = 1;
+	aprint_normal("\n");
 
 	return;
-}
-
-static int
-digfilt_activate(device_t self, enum devact act)
-{
-	return EOPNOTSUPP;
 }
 
 static int
@@ -376,67 +324,42 @@ digfilt_round_blocksize(void *priv, int bs, int mode,
 static int
 digfilt_init_output(void *priv, void *buffer, int size)
 {
-	struct digfilt_softc *sc = priv;
-	apbdma_command_t dma_cmd;
-	int i;
-	dma_cmd = sc->sc_dmachain;
-	sc->sc_cmd_index = 0;
-
-	/*
-	 * Build circular DMA command chain template for later use.
-	 */
-	for (i = 0; i < DIGFILT_DMA_CHAIN_LENGTH; i++) {
-		/* Last entry loops back to first. */
-		if (i == DIGFILT_DMA_CHAIN_LENGTH - 1)
-			dma_cmd[i].next = (void *)(sc->sc_c_dmamp->dm_segs[0].ds_addr);
-		else
-			dma_cmd[i].next = (void *)(sc->sc_c_dmamp->dm_segs[0].ds_addr + (sizeof(struct apbdma_command) * (1 + i)));
-
-		dma_cmd[i].control = __SHIFTIN(DIGFILT_BLOCKSIZE_MAX,  APBDMA_CMD_XFER_COUNT) |
-		    __SHIFTIN(1, APBDMA_CMD_CMDPIOWORDS) |
-		    APBDMA_CMD_SEMAPHORE |
-		    APBDMA_CMD_IRQONCMPLT |
-		    APBDMA_CMD_CHAIN |
-		    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-
-		dma_cmd[i].buffer = (void *)(sc->sc_c_dmamp->dm_segs[0].ds_addr);
-
-		dma_cmd[i].pio_words[0] = HW_AUDIOOUT_CTRL_WORD_LENGTH |
-		    HW_AUDIOOUT_CTRL_FIFO_ERROR_IRQ_EN |
-		    HW_AUDIOOUT_CTRL_RUN;
-
-	}
-
-	apbdma_chan_set_chain(sc->sc_dmac, DIGFILT_DMA_CHANNEL, sc->sc_c_dmamp);
-
 	return 0;
 }
 
 static int
-digfilt_start_output(void *priv, void *start, int bs, void (*intr)(void*), void *intarg)
+digfilt_start_output(void *priv, void *start, int bs, void (*intr)(void *),
+		     void *intarg)
 {
 	struct digfilt_softc *sc = priv;
-	apbdma_command_t dma_cmd;
-	bus_addr_t offset;
+	struct fdtbus_dma_req req;
 
 	sc->sc_intr = intr;
 	sc->sc_intarg = intarg;
-	dma_cmd = sc->sc_dmachain;
 
-	offset = (bus_addr_t)start - (bus_addr_t)sc->sc_buffer;
+	/* synthesize a dma segment with the correct offset+size */
+	bus_addr_t offset = (bus_addr_t)start - (bus_addr_t)sc->sc_buffer;
+	bus_dma_segment_t dma_seg;
+	dma_seg.ds_addr = sc->sc_dmamp->dm_segs[0].ds_addr + offset;
+	dma_seg.ds_len = bs;
 
-	dma_cmd[sc->sc_cmd_index].buffer =
-	    (void *)((bus_addr_t)sc->sc_dmamp->dm_segs[0].ds_addr + offset);
+	/* configure DMA request */
+	req.dreq_dir = FDT_DMA_WRITE;
+	req.dreq_segs = &dma_seg;
+	req.dreq_nsegs = 1;
+	req.dreq_block_irq = 0;
 
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, offset, bs, BUS_DMASYNC_PREWRITE);
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_c_dmamp,
-	    sizeof(struct apbdma_command) * sc->sc_cmd_index, sizeof(struct apbdma_command), BUS_DMASYNC_PREWRITE);
+	/* configure DMA PIO words */
+	uint32_t pio_words[1];
+	pio_words[0] = HW_AUDIOOUT_CTRL_WORD_LENGTH |
+		       HW_AUDIOOUT_CTRL_RUN;
+	req.dreq_datalen = 1;
+	req.dreq_data = &pio_words;
 
-	sc->sc_cmd_index++;
-	if (sc->sc_cmd_index > DIGFILT_DMA_CHAIN_LENGTH - 1)
-		sc->sc_cmd_index = 0;
-
-	apbdma_run(sc->sc_dmac, DIGFILT_DMA_CHANNEL);
+	/* send it off*/
+	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, offset, bs,
+			BUS_DMASYNC_PREWRITE);
+	fdtbus_dma_transfer(sc->dma_channel, &req);
 
 	return 0;
 }
@@ -445,8 +368,6 @@ static int
 digfilt_halt_output(void *priv)
 {
 	struct digfilt_softc *sc = priv;
-
-	sc->sc_cmd_index = 0;
 
 	/* We have intr lock when this is called */
 	sc->sc_intr = NULL;
@@ -790,75 +711,20 @@ dac_error_intr(void *arg)
 /*
  * IRQ from DMA.
  */
-static int
+static void
 dac_dma_intr(void *arg)
 {
 	struct digfilt_softc *sc = arg;
 
-	unsigned int dma_err;
-
 	mutex_enter(&sc->sc_intr_lock);
-
-	dma_err = apbdma_intr_status(sc->sc_dmac, DIGFILT_DMA_CHANNEL);
-
-	if (dma_err) {
-		apbdma_ack_error_intr(sc->sc_dmac, DIGFILT_DMA_CHANNEL);
-	}
 
 	/* When halting, the driver finishes playing the current block, but
 	 * the audio subsystem no longer expects us to call back */
 	if(sc->sc_intr != NULL) {
 		sc->sc_intr(sc->sc_intarg);
 	}
-	apbdma_ack_intr(sc->sc_dmac, DIGFILT_DMA_CHANNEL);
 
 	mutex_exit(&sc->sc_intr_lock);
-
-	/* Return 1 to acknowledge IRQ. */
-	return 1;
-}
-
-static void *
-digfilt_ao_alloc_dmachain(void *priv, size_t size)
-{
-	struct digfilt_softc *sc = priv;
-	int rsegs;
-	int error;
-	void *kvap;
-
-	kvap = NULL;
-
-	error = bus_dmamem_alloc(sc->sc_dmat, size, PAGE_SIZE, 0, &sc->sc_c_ds[0], DIGFILT_DMA_NSEGS, &rsegs, BUS_DMA_NOWAIT);
-	if (error) {
-		aprint_error_dev(sc->sc_dev,
-		    "bus_dmamem_alloc: %d\n", error);
-		goto out;
-	}
-
-	error = bus_dmamem_map(sc->sc_dmat, sc->sc_c_ds, DIGFILT_DMA_NSEGS, size, &kvap, BUS_DMA_NOWAIT);
-	if (error) {
-		aprint_error_dev(sc->sc_dev, "bus_dmamem_map: %d\n", error);
-		goto dmamem_free;
-	}
-
-	/* After load sc_c_dmamp is valid. */
-	error = bus_dmamap_load(sc->sc_dmat, sc->sc_c_dmamp, kvap, size, NULL, BUS_DMA_NOWAIT|BUS_DMA_WRITE);
-	if (error) {
-		aprint_error_dev(sc->sc_dev, "bus_dmamap_load: %d\n", error);
-		goto dmamem_unmap;
-	}
-
-	memset(kvap, 0x00, size);
-
-	return kvap;
-
-dmamem_unmap:
-	bus_dmamem_unmap(sc->sc_dmat, kvap, size);
-dmamem_free:
-	bus_dmamem_free(sc->sc_dmat, sc->sc_c_ds, DIGFILT_DMA_NSEGS);
-out:
-
-	return kvap;
 }
 
 static void

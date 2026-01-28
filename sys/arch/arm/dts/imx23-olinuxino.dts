@@ -46,5 +46,15 @@
 				status = "okay";
 			};
 		};
+
+		apbx-bus@80040000 {
+			audio-out@80048000 {
+				compatible = "fsl,imx23-audioout";
+				interrupts = <6>;
+				dmas = <&dma_apbx 1>;
+				dma-names = "tx";
+				status = "okay";
+			};
+		};
 	};
 };

@@ -41,7 +41,6 @@
 #include <sys/mallocvar.h>
 #include <dev/audio/audio_if.h>
 #include <arm/imx/imx23_digfiltreg.h>
-#include <arm/imx/imx23_rtcvar.h>
 #include <arm/imx/imx23_clkctrlvar.h>
 #include <arm/imx/imx23_apbdmavar.h>
 #include <arm/imx/imx23_icollreg.h>
@@ -910,9 +909,6 @@ digfilt_ao_init(struct digfilt_softc *sc)
 
 	/* Hold headphones outputs at ground. */
 	AO_WR(sc, HW_AUDIOOUT_ANACTRL_SET, HW_AUDIOOUT_ANACTRL_HP_HOLD_GND);
-
-	/* Remove pulldown resistors on headphone outputs. */
-	rtc_release_gnd(1);
 
 	/* Release pull down */
 	AO_WR(sc, HW_AUDIOOUT_ANACTRL_CLR, HW_AUDIOOUT_ANACTRL_HP_HOLD_GND);

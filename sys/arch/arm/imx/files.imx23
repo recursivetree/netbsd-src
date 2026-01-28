@@ -85,7 +85,7 @@ file	arch/arm/imx/imxusb.c		imxehci
 
 # RTC
 device imx23rtc
-attach imx23rtc at apbx
+attach imx23rtc at fdt
 file arch/arm/imx/imx23_rtc.c		imx23rtc
 
 # Digital filter: Audio I/O

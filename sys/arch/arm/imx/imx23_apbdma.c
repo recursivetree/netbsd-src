@@ -222,11 +222,13 @@ apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 		cmd->buffer = (void *)req->dreq_segs[0].ds_addr;
 	}
 	cmd->next = NULL;
-	cmd->control =
-	    __SHIFTIN(transfer_len, APBDMA_CMD_XFER_COUNT) |
-	    __SHIFTIN(req->dreq_datalen, APBDMA_CMD_CMDPIOWORDS) | APBDMA_CMD_HALTONTERMINATE |
-	    APBDMA_CMD_WAIT4ENDCMD | APBDMA_CMD_SEMAPHORE |
-	    APBDMA_CMD_IRQONCMPLT;
+	cmd->control = __SHIFTIN(transfer_len, APBDMA_CMD_XFER_COUNT) |
+		       __SHIFTIN(req->dreq_datalen, APBDMA_CMD_CMDPIOWORDS) |
+		       APBDMA_CMD_HALTONTERMINATE | APBDMA_CMD_SEMAPHORE |
+		       APBDMA_CMD_IRQONCMPLT;
+	if (req->dreq_block_irq) {
+		cmd->control |= APBDMA_CMD_WAIT4ENDCMD;
+	}
 	/* The fdt subsystem and the imx23 documentation use opposite naming */
 	if(req->dreq_dir == FDT_DMA_WRITE) {
 		cmd->control |= __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);

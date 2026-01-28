@@ -91,8 +91,8 @@ ld* 		at sdmmc?
 pseudo-device 	tprof
 
 # GPIOs
-imx23pctl* 	at fdt?	pass 1		# imx23 pin control+gpio
-gpio* 		at gpiobus?
+imx23pctl* 			at fdt?	pass 1		# imx23 pin control+gpio
+gpio* 					at gpiobus?
 
 # UART
 com* 		at fdt?	pass 4		# UART
@@ -108,7 +108,7 @@ iic* 		at i2cbus?
 # USB
 imx23usbphy*	at fdt? pass 1	# i.MX23 usb phy
 
-imxusbc* 	at fdt? pass 3 # i.MX23 usb controller
+imxusbc* 	at fdt? pass 6 # i.MX23 usb controller
 
 ehci* 		at imxusbc?
 

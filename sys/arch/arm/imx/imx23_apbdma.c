@@ -34,7 +34,6 @@
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/errno.h>
-#include <sys/mutex.h>
 #include <sys/kmem.h>
 #include <sys/systm.h>
 
@@ -118,7 +117,6 @@ typedef struct apbdma_softc {
 	bus_dmamap_t sc_dmamp;
 	bus_space_handle_t sc_ioh;
 	bus_space_tag_t sc_iot;
-	kmutex_t sc_lock;
 	u_int flags;
 	struct apbdma_channel sc_chan[AHB_MAX_DMA_CHANNELS];
 	bus_size_t sc_cmd_sz;
@@ -205,13 +203,15 @@ apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 
 	struct apbdma_command *cmd = &sc->sc_cmds[chan->chan_index];
 
-	if((req->dreq_dir==FDT_DMA_NO_XFER &&  req->dreq_nsegs != 0) || (req->dreq_dir!=FDT_DMA_NO_XFER &&  req->dreq_nsegs != 1)) {
+	if ((req->dreq_dir == FDT_DMA_NO_XFER && req->dreq_nsegs != 0) ||
+	    (req->dreq_dir != FDT_DMA_NO_XFER && req->dreq_nsegs != 1)) {
 		return EINVAL;
 	}
-	if(req->dreq_nsegs > 0 && req->dreq_segs[0].ds_len > APBDMA_CMD_XFER_MAX_BYTES) {
+	if (req->dreq_nsegs > 0 &&
+	    req->dreq_segs[0].ds_len > APBDMA_CMD_XFER_MAX_BYTES) {
 		return EINVAL;
 	}
-	if(req->dreq_datalen > MAX_PIO_WORDS) {
+	if (req->dreq_datalen > MAX_PIO_WORDS) {
 		return EINVAL;
 	}
 
@@ -230,26 +230,35 @@ apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 		cmd->control |= APBDMA_CMD_WAIT4ENDCMD;
 	}
 	/* The fdt subsystem and the imx23 documentation use opposite naming */
-	if(req->dreq_dir == FDT_DMA_WRITE) {
-		cmd->control |= __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
-	} else if(req->dreq_dir == FDT_DMA_READ) {
-		cmd->control |= __SHIFTIN(APBDMA_CMD_DMA_WRITE, APBDMA_CMD_COMMAND);
+	if (req->dreq_dir == FDT_DMA_WRITE) {
+		cmd->control |=
+		    __SHIFTIN(APBDMA_CMD_DMA_READ, APBDMA_CMD_COMMAND);
+	} else if (req->dreq_dir == FDT_DMA_READ) {
+		cmd->control |=
+		    __SHIFTIN(APBDMA_CMD_DMA_WRITE, APBDMA_CMD_COMMAND);
 	} else {
-		cmd->control |= __SHIFTIN(APBDMA_CMD_NO_DMA_XFER, APBDMA_CMD_COMMAND);
+		cmd->control |=
+		    __SHIFTIN(APBDMA_CMD_NO_DMA_XFER, APBDMA_CMD_COMMAND);
 	}
 	uint32_t *pio_words = req->dreq_data;
-	for(int i=0;i<req->dreq_datalen;i++) {
+	for (int i = 0; i < req->dreq_datalen; i++) {
 		cmd->pio_words[i] = pio_words[i];
 	}
 
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, chan->chan_index * sizeof(struct apbdma_command), sizeof(struct apbdma_command), BUS_DMASYNC_PREWRITE);
+	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp,
+			chan->chan_index * sizeof(struct apbdma_command),
+			sizeof(struct apbdma_command), BUS_DMASYNC_PREWRITE);
 
 	/* set the address of the dma command */
-	bus_addr_t phys_cmd_addr = sc->sc_ds[0].ds_addr + chan->chan_index * sizeof(struct apbdma_command);
+	bus_addr_t phys_cmd_addr =
+	    sc->sc_ds[0].ds_addr +
+	    chan->chan_index * sizeof(struct apbdma_command);
 	if (sc->flags & F_APBH_DMA)
-		reg = HW_APB_CHN_NXTCMDAR(HW_APBH_CH0_NXTCMDAR, chan->chan_index);
+		reg =
+		    HW_APB_CHN_NXTCMDAR(HW_APBH_CH0_NXTCMDAR, chan->chan_index);
 	else
-		reg = HW_APB_CHN_NXTCMDAR(HW_APBX_CH0_NXTCMDAR,  chan->chan_index);
+		reg =
+		    HW_APB_CHN_NXTCMDAR(HW_APBX_CH0_NXTCMDAR, chan->chan_index);
 	DMA_WR(sc, reg, phys_cmd_addr);
 
 	/* increase semaphore to start dma transfer */
@@ -302,22 +311,29 @@ apbdma_intr(void *frame)
 		}
 	}
 
-	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, 0, sc->sc_cmd_sz, BUS_DMASYNC_POSTWRITE);
+	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp, 0, sc->sc_cmd_sz,
+			BUS_DMASYNC_POSTWRITE);
 
-	if(chan->chan_cb != NULL) {
+	if (chan->chan_cb != NULL) {
 		chan->chan_cb(chan->chan_cbarg);
 	}
 
-	if(reason == DMA_IRQ_TERM) {
+	if (reason == DMA_IRQ_TERM) {
 		/* reset the dma channel */
 		if (sc->flags & F_APBH_DMA) {
 			DMA_WR(sc, HW_APB_CTRL0_SET,
-			       __SHIFTIN((1<<chan->chan_index), HW_APBH_CTRL0_RESET_CHANNEL));
-			while(DMA_RD(sc, HW_APB_CTRL0) & HW_APBH_CTRL0_RESET_CHANNEL);
+			       __SHIFTIN((1 << chan->chan_index),
+					 HW_APBH_CTRL0_RESET_CHANNEL));
+			while (DMA_RD(sc, HW_APB_CTRL0) &
+			       HW_APBH_CTRL0_RESET_CHANNEL)
+				;
 		} else {
 			DMA_WR(sc, HW_APBX_CHANNEL_CTRL_SET,
-			       __SHIFTIN((1<<chan->chan_index), HW_APBH_CTRL0_RESET_CHANNEL));
-			while(DMA_RD(sc, HW_APBX_CHANNEL_CTRL) & (1<<chan->chan_index));
+			       __SHIFTIN((1 << chan->chan_index),
+					 HW_APBH_CTRL0_RESET_CHANNEL));
+			while (DMA_RD(sc, HW_APBX_CHANNEL_CTRL) &
+			       (1 << chan->chan_index))
+				;
 		}
 	}
 
@@ -432,9 +448,6 @@ apbdma_attach(device_t parent, device_t self, void *aux)
 	}
 	apbdma_reset(sc);
 	apbdma_init(sc);
-
-	/* Initialize mutex to control concurrent access from the drivers. */
-	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_HIGH);
 
 	fdtbus_register_dma_controller(self, phandle, &apbdma_fdt_dma_funcs);
 

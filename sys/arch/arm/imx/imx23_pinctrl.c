@@ -42,7 +42,6 @@
 #include <dev/gpio/gpiovar.h>
 
 #include <arm/imx/imx23_pinctrlreg.h>
-#include <arm/imx/imx23_pinctrlvar.h>
 #include <arm/imx/imx23var.h>
 
 #define IMX23_NUM_GPIO_PINS 96
@@ -535,29 +534,6 @@ static void
 imx23_pinctrl_init(struct imx23_pinctrl_softc *sc)
 {
 	_sc = sc;
-	return;
-}
-
-/*
- * Enable external USB transceiver/HUB.
- *
- * PIN18/LCD_D17/USB_EN controls reset line of external USB chip on MINI and
- * MAXI boards. We configure this pin to logic 1.
- */
-void
-imx23_pinctrl_en_usb(void)
-{
-	struct imx23_pinctrl_softc *sc = _sc;
-
-        if (sc == NULL) {
-                aprint_error("imx23_pinctrl is not initialized");
-                return;
-        }
-
-	imx23_pinctrl_gp_pin_ctl(sc, 17, GPIO_PIN_OUTPUT);
-	delay(1000);
-	imx23_pinctrl_gp_pin_write(sc, 17, 1);
-
 	return;
 }
 

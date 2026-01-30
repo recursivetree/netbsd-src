@@ -12,23 +12,8 @@ defflag	opt_soc.h				SOC_IMX23
 
 file	arch/arm/imx/imx23_platform.c	soc_imx23
 
-file	arch/arm/imx/imx23_space.c	ahb|apbh|apbx
-file	arch/arm/imx/imx23_dma.c	ahb|apbh|apbx
-
-# APBH bus interface
-device	apbh {addr=0, size=0, irq=-1} : bus_space_generic
-attach	apbh at mainbus
-file	arch/arm/imx/imx23_apbh.c	apbh
-
-# APBX bus interface
-device	apbx {addr=0, size=0, irq=-1} : bus_space_generic
-attach	apbx at mainbus
-file	arch/arm/imx/imx23_apbx.c	apbx
-
-# AHB bus interface
-device  ahb {addr=0, size=0, irq=-1} : bus_space_generic
-attach  ahb at mainbus
-file    arch/arm/imx/imx23_ahb.c	ahb
+file	arch/arm/imx/imx23_space.c	soc_imx23
+file	arch/arm/imx/imx23_dma.c	soc_imx23
 
 # Interrupt controller
 device	imx23icoll: pic, pic_splfuncs
@@ -40,12 +25,8 @@ device	imx23mmc: sdmmcbus
 attach	imx23mmc at fdt
 file	arch/arm/imx/imx23_mmc.c	imx23mmc
 
-# PL011 Debug console
-attach	plcom at apbx with imx23plcom
-file	arch/arm/imx/imx23_plcom.c	imx23plcom
-
 # Timers and rotary decoder
-device	imx23timrot: apbx
+device	imx23timrot
 attach	imx23timrot at fdt: fdt_clock
 file	arch/arm/imx/imx23_timrot.c	imx23timrot
 

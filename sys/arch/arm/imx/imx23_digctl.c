@@ -42,25 +42,25 @@
 #include <arm/imx/imx23_digctlreg.h>
 #include <arm/imx/imx23var.h>
 
-struct digctl_softc {
+struct imx23_digctl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
 };
 
-static int	digctl_match(device_t, cfdata_t, void *);
-static void	digctl_attach(device_t, device_t, void *);
+static int	imx23_digctl_match(device_t, cfdata_t, void *);
+static void	imx23_digctl_attach(device_t, device_t, void *);
 
-static void     digctl_reset(struct digctl_softc *);
-static void     digctl_init(struct digctl_softc *);
+static void     imx23_digctl_reset(struct imx23_digctl_softc *);
+static void     imx23_digctl_init(struct imx23_digctl_softc *);
 
 /* timecounter. */
-static u_int digctl_tc_get_timecount(struct timecounter *);
+static u_int imx23_digctl_tc_get_timecount(struct timecounter *);
 
-static struct digctl_softc *_sc = NULL;
+static struct imx23_digctl_softc *_sc = NULL;
 
-CFATTACH_DECL_NEW(imx23digctl, sizeof(struct digctl_softc),
-		  digctl_match, digctl_attach, NULL, NULL);
+CFATTACH_DECL_NEW(imx23digctl, sizeof(struct imx23_digctl_softc),
+		  imx23_digctl_match, imx23_digctl_attach, NULL, NULL);
 
 static struct timecounter tc_useconds;
 
@@ -75,7 +75,7 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-digctl_match(device_t parent, cfdata_t match, void *aux)
+imx23_digctl_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -83,9 +83,9 @@ digctl_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-digctl_attach(device_t parent, device_t self, void *aux)
+imx23_digctl_attach(device_t parent, device_t self, void *aux)
 {
-	struct digctl_softc * const sc = device_private(self);
+	struct imx23_digctl_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 
@@ -105,13 +105,13 @@ digctl_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
-	digctl_reset(sc);
-	digctl_init(sc);
+	imx23_digctl_reset(sc);
+	imx23_digctl_init(sc);
 
 	/*
 	 * Setup timecounter to use digctl microseconds counter.
 	 */
-	tc_useconds.tc_get_timecount = digctl_tc_get_timecount;
+	tc_useconds.tc_get_timecount = imx23_digctl_tc_get_timecount;
 	tc_useconds.tc_poll_pps = NULL;
 	tc_useconds.tc_counter_mask = 0xffffffff; /* 32bit counter. */
 	tc_useconds.tc_frequency = 1000000;       /* @ 1MHz */
@@ -133,13 +133,13 @@ digctl_attach(device_t parent, device_t self, void *aux)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 static void
-digctl_reset(struct digctl_softc *sc)
+imx23_digctl_reset(struct imx23_digctl_softc *sc)
 {
         return;
 }
 
 static void
-digctl_init(struct digctl_softc *sc)
+imx23_digctl_init(struct imx23_digctl_softc *sc)
 {
 	_sc = sc;
 	return;
@@ -149,8 +149,8 @@ digctl_init(struct digctl_softc *sc)
  *
  */
 static u_int
-digctl_tc_get_timecount(struct timecounter *tc)
+imx23_digctl_tc_get_timecount(struct timecounter *tc)
 {
-	struct digctl_softc *sc = _sc;
+	struct imx23_digctl_softc *sc = _sc;
 	return DCTL_RD(sc, HW_DIGCTL_MICROSECONDS);
 }

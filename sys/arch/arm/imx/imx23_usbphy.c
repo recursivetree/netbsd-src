@@ -41,20 +41,20 @@
 #include <arm/imx/imx23_usbphyreg.h>
 #include <arm/imx/imx23var.h>
 
-struct usbphy_softc {
+struct imx23_usbphy_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
 };
 
-static int	usbphy_match(device_t, cfdata_t, void *);
-static void	usbphy_attach(device_t, device_t, void *);
+static int	imx23_usbphy_match(device_t, cfdata_t, void *);
+static void	imx23_usbphy_attach(device_t, device_t, void *);
 
-static void     usbphy_reset(struct usbphy_softc *);
-static void     usbphy_init(struct usbphy_softc *);
+static void     imx23_usbphy_reset(struct imx23_usbphy_softc *);
+static void     imx23_usbphy_init(struct imx23_usbphy_softc *);
 
-CFATTACH_DECL_NEW(imx23usbphy, sizeof(struct usbphy_softc),
-		  usbphy_match, usbphy_attach, NULL, NULL);
+CFATTACH_DECL_NEW(imx23usbphy, sizeof(struct imx23_usbphy_softc),
+		  imx23_usbphy_match, imx23_usbphy_attach, NULL, NULL);
 
 #define PHY_RD(sc, reg)                                                 \
         bus_space_read_4(sc->sc_iot, sc->sc_hdl, (reg))
@@ -69,7 +69,7 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-usbphy_match(device_t parent, cfdata_t match, void *aux)
+imx23_usbphy_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -77,9 +77,9 @@ usbphy_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-usbphy_attach(device_t parent, device_t self, void *aux)
+imx23_usbphy_attach(device_t parent, device_t self, void *aux)
 {
-	struct usbphy_softc * const sc = device_private(self);
+	struct imx23_usbphy_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 	uint32_t phy_version;
@@ -98,8 +98,8 @@ usbphy_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	usbphy_reset(sc);
-	usbphy_init(sc);
+	imx23_usbphy_reset(sc);
+	imx23_usbphy_init(sc);
 
 	phy_version = PHY_RD(sc, HW_USBPHY_VERSION);
         aprint_normal(": USB PHY v%" __PRIuBIT ".%" __PRIuBIT "\n",
@@ -116,7 +116,7 @@ usbphy_attach(device_t parent, device_t self, void *aux)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 static void
-usbphy_reset(struct usbphy_softc *sc)
+imx23_usbphy_reset(struct imx23_usbphy_softc *sc)
 {
         unsigned int loop;
 
@@ -160,7 +160,7 @@ usbphy_reset(struct usbphy_softc *sc)
  * Enable USB PHY.
  */
 static void
-usbphy_init(struct usbphy_softc *sc)
+imx23_usbphy_init(struct imx23_usbphy_softc *sc)
 {
 	/* Disable power down bits. */
 	PHY_WR(sc, HW_USBPHY_PWD_CLR,

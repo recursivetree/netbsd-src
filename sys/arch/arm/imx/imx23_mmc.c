@@ -231,6 +231,7 @@ issp_attach(device_t parent, device_t self, void *aux)
 	    __SHIFTOUT(issp_vers, HW_SSP_VERSION_MINOR));
 
 	/* Attach sdmmc to ssp bus. */
+	memset(&saa, 0, sizeof(saa));
 	saa.saa_busname = "sdmmc";
 	saa.saa_sct	= &issp_functions;
 	saa.saa_spi_sct	= NULL;

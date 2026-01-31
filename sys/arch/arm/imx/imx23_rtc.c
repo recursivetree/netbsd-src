@@ -41,19 +41,19 @@
 #include <arm/imx/imx23_rtcreg.h>
 #include <arm/imx/imx23var.h>
 
-struct rtc_softc {
+struct imx23_rtc_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
 };
 
-static int	rtc_match(device_t, cfdata_t, void *);
-static void	rtc_attach(device_t, device_t, void *);
+static int	imx23_rtc_match(device_t, cfdata_t, void *);
+static void	imx23_rtc_attach(device_t, device_t, void *);
 
-static void     rtc_reset(struct rtc_softc *);
+static void     imx23_rtc_reset(struct imx23_rtc_softc *);
 
-CFATTACH_DECL_NEW(imx23rtc, sizeof(struct rtc_softc), rtc_match, rtc_attach,
-		  NULL, NULL);
+CFATTACH_DECL_NEW(imx23rtc, sizeof(struct imx23_rtc_softc), imx23_rtc_match,
+		  imx23_rtc_attach, NULL, NULL);
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "fsl,imx23-rtc" },
@@ -68,7 +68,7 @@ static const struct device_compatible_entry compat_data[] = {
 #define RTC_SOFT_RST_LOOP 455 /* At least 1 us ... */
 
 static int
-rtc_match(device_t parent, cfdata_t match, void *aux)
+imx23_rtc_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -76,9 +76,9 @@ rtc_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-rtc_attach(device_t parent, device_t self, void *aux)
+imx23_rtc_attach(device_t parent, device_t self, void *aux)
 {
-	struct rtc_softc * const sc = device_private(self);
+	struct imx23_rtc_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 
@@ -98,7 +98,7 @@ rtc_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
-	rtc_reset(sc);
+	imx23_rtc_reset(sc);
 
 	RTC_WR(sc, HW_RTC_PERSISTENT0_SET, (1<<19));
 
@@ -111,7 +111,7 @@ rtc_attach(device_t parent, device_t self, void *aux)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 static void
-rtc_reset(struct rtc_softc *sc)
+imx23_rtc_reset(struct imx23_rtc_softc *sc)
 {
         unsigned int loop;
 

@@ -58,7 +58,7 @@
  * - Uset GPIO for SD card detection.
  */
 
-typedef struct issp_softc {
+struct imx23_mmc_softc {
 	device_t sc_dev;
 	struct fdtbus_dma *dma_channel;
 	bus_space_handle_t sc_hdl;
@@ -70,54 +70,54 @@ typedef struct issp_softc {
 	uint8_t sc_state;
 	uint8_t sc_bus_width;
 	uint32_t pio_words[3];
-} *issp_softc_t;
-
-
-static int	issp_match(device_t, cfdata_t, void *);
-static void	issp_attach(device_t, device_t, void *);
-
-static void	issp_reset(struct issp_softc *);
-static void	issp_init(struct issp_softc *);
-static uint32_t	issp_set_sck(struct issp_softc *, uint32_t);
-static void	issp_dma_intr(void *);
-static int	issp_error_intr(void *);
-static void 	issp_prepare_data_command(issp_softc_t, struct fdtbus_dma_req *,
-					  struct sdmmc_command *);
-static void 	issp_prepare_command(issp_softc_t, struct fdtbus_dma_req *,
-				     struct sdmmc_command *);
-
-/* sdmmc(4) driver chip function prototypes. */
-static int	issp_host_reset(sdmmc_chipset_handle_t);
-static uint32_t	issp_host_ocr(sdmmc_chipset_handle_t);
-static int	issp_host_maxblklen(sdmmc_chipset_handle_t);
-static int	issp_card_detect(sdmmc_chipset_handle_t);
-static int	issp_write_protect(sdmmc_chipset_handle_t);
-static int	issp_bus_power(sdmmc_chipset_handle_t, uint32_t);
-static int	issp_bus_clock(sdmmc_chipset_handle_t, int);
-static int	issp_bus_width(sdmmc_chipset_handle_t, int);
-static int	issp_bus_rod(sdmmc_chipset_handle_t, int);
-static void	issp_exec_command(sdmmc_chipset_handle_t,
-		struct sdmmc_command *);
-static void	issp_card_enable_intr(sdmmc_chipset_handle_t, int);
-static void	issp_card_intr_ack(sdmmc_chipset_handle_t);
-
-static struct sdmmc_chip_functions issp_functions = {
-	.host_reset	= issp_host_reset,
-	.host_ocr	= issp_host_ocr,
-	.host_maxblklen	= issp_host_maxblklen,
-	.card_detect	= issp_card_detect,
-	.write_protect	= issp_write_protect,
-	.bus_power	= issp_bus_power,
-	.bus_clock	= issp_bus_clock,
-	.bus_width	= issp_bus_width,
-	.bus_rod	= issp_bus_rod,
-	.exec_command	= issp_exec_command,
-	.card_enable_intr = issp_card_enable_intr,
-	.card_intr_ack	= issp_card_intr_ack
 };
 
-CFATTACH_DECL_NEW(imx23mmc, sizeof(struct issp_softc), issp_match,
-		  issp_attach, NULL, NULL);
+
+static int	imx23_mmc_match(device_t, cfdata_t, void *);
+static void	imx23_mmc_attach(device_t, device_t, void *);
+
+static void	imx23_mmc_reset(struct imx23_mmc_softc *);
+static void	imx23_mmc_init(struct imx23_mmc_softc *);
+static uint32_t	imx23_mmc_set_sck(struct imx23_mmc_softc *, uint32_t);
+static void	imx23_mmc_dma_intr(void *);
+static int	imx23_mmc_error_intr(void *);
+static void 	imx23_mmc_prepare_data_command(struct imx23_mmc_softc *,
+			       struct fdtbus_dma_req *, struct sdmmc_command *);
+static void 	imx23_mmc_prepare_command(struct imx23_mmc_softc *,
+			  struct fdtbus_dma_req *, struct sdmmc_command *);
+
+/* sdmmc(4) driver chip function prototypes. */
+static int	imx23_mmc_host_reset(sdmmc_chipset_handle_t);
+static uint32_t	imx23_mmc_host_ocr(sdmmc_chipset_handle_t);
+static int	imx23_mmc_host_maxblklen(sdmmc_chipset_handle_t);
+static int	imx23_mmc_card_detect(sdmmc_chipset_handle_t);
+static int	imx23_mmc_write_protect(sdmmc_chipset_handle_t);
+static int	imx23_mmc_bus_power(sdmmc_chipset_handle_t, uint32_t);
+static int	imx23_mmc_bus_clock(sdmmc_chipset_handle_t, int);
+static int	imx23_mmc_bus_width(sdmmc_chipset_handle_t, int);
+static int	imx23_mmc_bus_rod(sdmmc_chipset_handle_t, int);
+static void	imx23_mmc_exec_command(sdmmc_chipset_handle_t,
+		struct sdmmc_command *);
+static void	imx23_mmc_card_enable_intr(sdmmc_chipset_handle_t, int);
+static void	imx23_mmc_card_intr_ack(sdmmc_chipset_handle_t);
+
+static struct sdmmc_chip_functions imx23_mmc_functions = {
+	.host_reset	= imx23_mmc_host_reset,
+	.host_ocr	= imx23_mmc_host_ocr,
+	.host_maxblklen	= imx23_mmc_host_maxblklen,
+	.card_detect	= imx23_mmc_card_detect,
+	.write_protect	= imx23_mmc_write_protect,
+	.bus_power	= imx23_mmc_bus_power,
+	.bus_clock	= imx23_mmc_bus_clock,
+	.bus_width	= imx23_mmc_bus_width,
+	.bus_rod	= imx23_mmc_bus_rod,
+	.exec_command	= imx23_mmc_exec_command,
+	.card_enable_intr = imx23_mmc_card_enable_intr,
+	.card_intr_ack	= imx23_mmc_card_intr_ack
+};
+
+CFATTACH_DECL_NEW(imx23mmc, sizeof(struct imx23_mmc_softc), imx23_mmc_match,
+		  imx23_mmc_attach, NULL, NULL);
 
 #define SSP_SOFT_RST_LOOP 455	/* At least 1 us ... */
 
@@ -165,7 +165,7 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-issp_match(device_t parent, cfdata_t match, void *aux)
+imx23_mmc_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args *const faa = aux;
 
@@ -173,9 +173,9 @@ issp_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-issp_attach(device_t parent, device_t self, void *aux)
+imx23_mmc_attach(device_t parent, device_t self, void *aux)
 {
-	struct issp_softc *const sc = device_private(self);
+	struct imx23_mmc_softc *const sc = device_private(self);
 	struct fdt_attach_args *const faa = aux;
 	const int phandle = faa->faa_phandle;
 	struct sdmmcbus_attach_args saa;
@@ -203,7 +203,8 @@ issp_attach(device_t parent, device_t self, void *aux)
 	cv_init(&sc->sc_intr_cv, "ssp_intr");
 
 	/* acquire DMA channel */
-	sc->dma_channel = fdtbus_dma_get(phandle,"rx-tx", issp_dma_intr, sc);
+	sc->dma_channel = fdtbus_dma_get(phandle,"rx-tx", imx23_mmc_dma_intr,
+					 sc);
 	if(sc->dma_channel == NULL) {
 		aprint_error(": couldn't map registers\n");
 		return;
@@ -215,25 +216,25 @@ issp_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_SDMMC, IST_LEVEL,
-					       issp_error_intr, sc,
+					       imx23_mmc_error_intr, sc,
 					 device_xname(self));
 	if (ih == NULL) {
 		aprint_error_dev(self, "couldn't establish error interrupt\n");
 		return;
 	}
 
-	issp_reset(sc);
-	issp_init(sc);
+	imx23_mmc_reset(sc);
+	imx23_mmc_init(sc);
 
-	uint32_t issp_vers = SSP_RD(sc, HW_SSP_VERSION);
+	uint32_t imx23_mmc_vers = SSP_RD(sc, HW_SSP_VERSION);
 	aprint_normal(": SSP Block v%" __PRIuBIT ".%" __PRIuBIT "\n",
-	    __SHIFTOUT(issp_vers, HW_SSP_VERSION_MAJOR),
-	    __SHIFTOUT(issp_vers, HW_SSP_VERSION_MINOR));
+	    __SHIFTOUT(imx23_mmc_vers, HW_SSP_VERSION_MAJOR),
+	    __SHIFTOUT(imx23_mmc_vers, HW_SSP_VERSION_MINOR));
 
 	/* Attach sdmmc to ssp bus. */
 	memset(&saa, 0, sizeof(saa));
 	saa.saa_busname = "sdmmc";
-	saa.saa_sct	= &issp_functions;
+	saa.saa_sct	= &imx23_mmc_functions;
 	saa.saa_spi_sct	= NULL;
 	saa.saa_sch	= sc;
 	saa.saa_dmat	= faa->faa_dmat;
@@ -254,22 +255,22 @@ issp_attach(device_t parent, device_t self, void *aux)
  * sdmmc chip functions.
  */
 static int
-issp_host_reset(sdmmc_chipset_handle_t sch)
+imx23_mmc_host_reset(sdmmc_chipset_handle_t sch)
 {
-	struct issp_softc *sc = sch;
-	issp_reset(sc);
+	struct imx23_mmc_softc *sc = sch;
+	imx23_mmc_reset(sc);
 	return 0;
 }
 
 static uint32_t
-issp_host_ocr(sdmmc_chipset_handle_t sch)
+imx23_mmc_host_ocr(sdmmc_chipset_handle_t sch)
 {
 	/* SSP supports at least 3.2 - 3.3v */
 	return MMC_OCR_3_2V_3_3V;
 }
 
 static int
-issp_host_maxblklen(sdmmc_chipset_handle_t sch)
+imx23_mmc_host_maxblklen(sdmmc_chipset_handle_t sch)
 {
 	return 512;
 }
@@ -279,35 +280,35 @@ issp_host_maxblklen(sdmmc_chipset_handle_t sch)
  * of the SD card.
  */
 static int
-issp_card_detect(sdmmc_chipset_handle_t sch)
+imx23_mmc_card_detect(sdmmc_chipset_handle_t sch)
 {
 	return 1; /* the olinuxino has no card detection */
 }
 
 static int
-issp_write_protect(sdmmc_chipset_handle_t sch)
+imx23_mmc_write_protect(sdmmc_chipset_handle_t sch)
 {
 	/* The device is not write protected. */
 	return 0;
 }
 
 static int
-issp_bus_power(sdmmc_chipset_handle_t sch, uint32_t ocr)
+imx23_mmc_bus_power(sdmmc_chipset_handle_t sch, uint32_t ocr)
 {
 	/* i.MX23 SSP does not support setting bus power. */
 	return 0;
 }
 
 static int
-issp_bus_clock(sdmmc_chipset_handle_t sch, int clock)
+imx23_mmc_bus_clock(sdmmc_chipset_handle_t sch, int clock)
 {
-	struct issp_softc *sc = sch;
+	struct imx23_mmc_softc *sc = sch;
 	uint32_t sck;
 
 	if (clock < SSP_CLK_MIN)
-		sck = issp_set_sck(sc, SSP_CLK_MIN * 1000);
+		sck = imx23_mmc_set_sck(sc, SSP_CLK_MIN * 1000);
 	else
-		sck = issp_set_sck(sc, clock * 1000);
+		sck = imx23_mmc_set_sck(sc, clock * 1000);
 
 	/* Notify user if we didn't get the exact clock rate from SSP that was
 	 * requested from the SDMMC subsystem. */
@@ -325,9 +326,9 @@ issp_bus_clock(sdmmc_chipset_handle_t sch, int clock)
 }
 
 static int
-issp_bus_width(sdmmc_chipset_handle_t sch, int width)
+imx23_mmc_bus_width(sdmmc_chipset_handle_t sch, int width)
 {
-	struct issp_softc *sc = sch;
+	struct imx23_mmc_softc *sc = sch;
 
 	switch(width) {
 	case(1):
@@ -347,16 +348,16 @@ issp_bus_width(sdmmc_chipset_handle_t sch, int width)
 }
 
 static int
-issp_bus_rod(sdmmc_chipset_handle_t sch, int rod)
+imx23_mmc_bus_rod(sdmmc_chipset_handle_t sch, int rod)
 {
 	/* Go to data transfer mode. */
 	return 0;
 }
 
 static void
-issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
+imx23_mmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 {
-	issp_softc_t sc = sch;
+	struct imx23_mmc_softc *sc = sch;
 	struct fdtbus_dma_req req;
 
 	/* SSP does not support over 64k transfer size. */
@@ -372,10 +373,10 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	/* Setup DMA command chain.*/
 	if (cmd->c_data != NULL && cmd->c_datalen) {
 		/* command with data */
-		issp_prepare_data_command(sc, &req, cmd);
+		imx23_mmc_prepare_data_command(sc, &req, cmd);
 	} else {
 		/* Only command, no data. */
-		issp_prepare_command(sc, &req, cmd);
+		imx23_mmc_prepare_command(sc, &req, cmd);
 	}
 
 
@@ -437,17 +438,17 @@ out:
 }
 
 static void
-issp_card_enable_intr(sdmmc_chipset_handle_t sch, int irq)
+imx23_mmc_card_enable_intr(sdmmc_chipset_handle_t sch, int irq)
 {
-	struct issp_softc *sc = sch;
+	struct imx23_mmc_softc *sc = sch;
 	aprint_error_dev(sc->sc_dev, "issp_card_enable_intr not implemented\n");
 	return;
 }
 
 static void
-issp_card_intr_ack(sdmmc_chipset_handle_t sch)
+imx23_mmc_card_intr_ack(sdmmc_chipset_handle_t sch)
 {
-	struct issp_softc *sc = sch;
+	struct imx23_mmc_softc *sc = sch;
 	aprint_error_dev(sc->sc_dev, "issp_card_intr_ack not implemented\n");
 	return;
 }
@@ -458,7 +459,7 @@ issp_card_intr_ack(sdmmc_chipset_handle_t sch)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 static void
-issp_reset(struct issp_softc *sc)
+imx23_mmc_reset(struct imx23_mmc_softc *sc)
 {
 	unsigned int loop;
 
@@ -502,7 +503,7 @@ issp_reset(struct issp_softc *sc)
  * Initialize SSP controller to SD/MMC mode.
  */
 static void
-issp_init(struct issp_softc *sc)
+imx23_mmc_init(struct imx23_mmc_softc *sc)
 {
 	uint32_t reg;
 
@@ -523,7 +524,7 @@ issp_init(struct issp_softc *sc)
 	SSP_WR(sc, HW_SSP_TIMING, reg);
 
 	/* Set initial clock rate to minimum. */
-	issp_set_sck(sc, SSP_CLK_MIN * 1000);
+	imx23_mmc_set_sck(sc, SSP_CLK_MIN * 1000);
 
 	reg = SSP_RD(sc, HW_SSP_CTRL1);
 	/* Enable all but SDIO IRQ's. */
@@ -550,12 +551,12 @@ issp_init(struct issp_softc *sc)
  *
  * SSP_SCK is calculated as: SSP_CLK / (CLOCK_DIVIDE * (1 + CLOCK_RATE))
  *
- * issp_set_sck finds the most suitable CLOCK_DIVIDE and CLOCK_RATE register
- * values for the target clock rate by iterating through all possible register
- * values.
+ * imx23_mmc_set_sck finds the most suitable CLOCK_DIVIDE and CLOCK_RATE
+ * register values for the target clock rate by iterating through all possible
+ * register values.
  */
 static uint32_t
-issp_set_sck(struct issp_softc *sc, uint32_t target)
+imx23_mmc_set_sck(struct imx23_mmc_softc *sc, uint32_t target)
 {
 	uint32_t newclk, found, reg;
 	uint8_t div, rate, d, r;
@@ -592,9 +593,9 @@ out:
  * IRQ from DMA.
  */
 static void
-issp_dma_intr(void *arg)
+imx23_mmc_dma_intr(void *arg)
 {
-	issp_softc_t sc = arg;
+	struct imx23_mmc_softc *sc = arg;
 
 	mutex_enter(&sc->sc_lock);
 	
@@ -613,9 +614,9 @@ issp_dma_intr(void *arg)
  * signal to DMA block.
  */
 static int
-issp_error_intr(void *arg)
+imx23_mmc_error_intr(void *arg)
 {
-	issp_softc_t sc = arg;
+	struct imx23_mmc_softc *sc = arg;
 
 	mutex_enter(&sc->sc_lock);
 
@@ -635,8 +636,8 @@ issp_error_intr(void *arg)
  * Set up a dma transfer for a block with data.
  */
 static void
-issp_prepare_data_command(issp_softc_t sc, struct fdtbus_dma_req *req,
-    struct sdmmc_command *cmd)
+imx23_mmc_prepare_data_command(struct imx23_mmc_softc *sc,
+	struct fdtbus_dma_req *req, struct sdmmc_command *cmd)
 {
 	int block_count = cmd->c_datalen / cmd->c_blklen;
 
@@ -686,8 +687,8 @@ issp_prepare_data_command(issp_softc_t sc, struct fdtbus_dma_req *req,
  * Setup a dma transfer for a command without data (PIO only)
  */
 static void
-issp_prepare_command(issp_softc_t sc, struct fdtbus_dma_req *req,
-    struct sdmmc_command *cmd)
+imx23_mmc_prepare_command(struct imx23_mmc_softc *sc,
+	struct fdtbus_dma_req *req, struct sdmmc_command *cmd)
 {
 	/* prepare DMA */
 	req->dreq_nsegs = 0;
@@ -712,7 +713,8 @@ issp_prepare_command(issp_softc_t sc, struct fdtbus_dma_req *req,
 	}
 
 	/* prepare CMD0 register */
-	sc->pio_words[PIO_WORD_CMD0] = __SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
+	sc->pio_words[PIO_WORD_CMD0] =
+	    __SHIFTIN(cmd->c_opcode, HW_SSP_CMD0_CMD);
 
 	/* prepare CMD1 register */
 	sc->pio_words[PIO_WORD_CMD1] = cmd->c_arg;

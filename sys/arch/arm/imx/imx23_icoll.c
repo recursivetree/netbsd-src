@@ -72,10 +72,10 @@ __KERNEL_RCSID(0, "$NetBSD: imx23_icoll.c,v 1.6 2025/10/09 06:15:16 skrll Exp $"
 			HW_ICOLL_INTERRUPT_PRIORITY)
 
 #define PICTOSOFTC(pic)							\
-	((struct icoll_softc *)((char *)(pic) -				\
-		offsetof(struct icoll_softc, sc_pic)))
+	((struct imx23_icoll_softc *)((char *)(pic) -			\
+		offsetof(struct imx23_icoll_softc, sc_pic)))
 
-struct icoll_softc {
+struct imx23_icoll_softc {
 	struct pic_softc sc_pic;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
@@ -84,41 +84,43 @@ struct icoll_softc {
 /*
  * pic callbacks.
  */
-static void	icoll_unblock_irqs(struct pic_softc *, size_t, uint32_t);
-static void	icoll_block_irqs(struct pic_softc *, size_t, uint32_t);
-static int	icoll_find_pending_irqs(struct pic_softc *);
-static void	icoll_establish_irq(struct pic_softc *, struct intrsource *);
-static void	icoll_source_name(struct pic_softc *, int, char *, size_t);
-static void	icoll_set_priority(struct pic_softc *, int);
+static void	imx23_icoll_unblock_irqs(struct pic_softc *, size_t, uint32_t);
+static void	imx23_icoll_block_irqs(struct pic_softc *, size_t, uint32_t);
+static int	imx23_icoll_find_pending_irqs(struct pic_softc *);
+static void	imx23_icoll_establish_irq(struct pic_softc *,
+			  		  struct intrsource *);
+static void	imx23_icoll_source_name(struct pic_softc *, int, char *,
+					size_t);
+static void	imx23_icoll_set_priority(struct pic_softc *, int);
 
 /*
  * autoconf(9) callbacks.
  */
-static int	icoll_match(device_t, cfdata_t, void *);
-static void	icoll_attach(device_t, device_t, void *);
+static int	imx23_icoll_match(device_t, cfdata_t, void *);
+static void	imx23_icoll_attach(device_t, device_t, void *);
 
 /*
  * fdt callbacks
  */
-static void *	icoll_fdt_establish(device_t, u_int *, int, int,
+static void *	imx23_icoll_fdt_establish(device_t, u_int *, int, int,
 			 int (*)(void *), void *, const char *);
-static void	icoll_fdt_disestablish(device_t, void *);
-static bool	icoll_fdt_intrstr(device_t, u_int *, char *, size_t);
-void 		icoll_intr_dispatch(struct clockframe *);
+static void	imx23_icoll_fdt_disestablish(device_t, void *);
+static bool	imx23_icoll_fdt_intrstr(device_t, u_int *, char *, size_t);
+void 		imx23_icoll_intr_dispatch(struct clockframe *);
 
-const static struct pic_ops icoll_pic_ops = {
-	.pic_unblock_irqs = icoll_unblock_irqs,
-	.pic_block_irqs = icoll_block_irqs,
-	.pic_find_pending_irqs = icoll_find_pending_irqs,
-	.pic_establish_irq = icoll_establish_irq,
-	.pic_source_name = icoll_source_name,
-	.pic_set_priority = icoll_set_priority
+const static struct pic_ops imx23_icoll_pic_ops = {
+	.pic_unblock_irqs = imx23_icoll_unblock_irqs,
+	.pic_block_irqs = imx23_icoll_block_irqs,
+	.pic_find_pending_irqs = imx23_icoll_find_pending_irqs,
+	.pic_establish_irq = imx23_icoll_establish_irq,
+	.pic_source_name = imx23_icoll_source_name,
+	.pic_set_priority = imx23_icoll_set_priority
 };
 
-struct fdtbus_interrupt_controller_func imx23icoll_fdt_funcs = {
-	.establish = icoll_fdt_establish,
-	.disestablish = icoll_fdt_disestablish,
-	.intrstr = icoll_fdt_intrstr
+struct fdtbus_interrupt_controller_func imx23_icoll_fdt_funcs = {
+	.establish = imx23_icoll_fdt_establish,
+	.disestablish = imx23_icoll_fdt_disestablish,
+	.intrstr = imx23_icoll_fdt_intrstr
 };
 
 static const struct device_compatible_entry compat_data[] = {
@@ -128,21 +130,21 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 /* For IRQ handler. */
-static struct icoll_softc *icoll_sc;
+static struct imx23_icoll_softc *icoll_sc;
 
 /*
  * Private to driver.
  */
-static void	icoll_reset(struct icoll_softc *);
+static void	imx23_icoll_reset(struct imx23_icoll_softc *);
 
-CFATTACH_DECL_NEW(imx23icoll, sizeof(struct icoll_softc),
-		  icoll_match, icoll_attach, NULL, NULL);
+CFATTACH_DECL_NEW(imx23icoll, sizeof(struct imx23_icoll_softc),
+		  imx23_icoll_match, imx23_icoll_attach, NULL, NULL);
 
 /*
  * ARM interrupt handler.
  */
 void
-icoll_intr_dispatch(struct clockframe *frame)
+imx23_icoll_intr_dispatch(struct clockframe *frame)
 {
 	struct cpu_info * const ci = curcpu();
 	struct pic_softc *pic_sc;
@@ -204,9 +206,10 @@ icoll_intr_dispatch(struct clockframe *frame)
  * pic callbacks.
  */
 static void
-icoll_unblock_irqs(struct pic_softc *pic, size_t irq_base, uint32_t irq_mask)
+imx23_icoll_unblock_irqs(struct pic_softc *pic, size_t irq_base,
+			 uint32_t irq_mask)
 {
-	struct icoll_softc *sc = PICTOSOFTC(pic);
+	struct imx23_icoll_softc *sc = PICTOSOFTC(pic);
 	uint8_t b;
 
 	for (;;) {
@@ -221,16 +224,16 @@ icoll_unblock_irqs(struct pic_softc *pic, size_t irq_base, uint32_t irq_mask)
 }
 
 static void
-icoll_block_irqs(struct pic_softc *pic, size_t irq_base, uint32_t irq_mask)
+imx23_icoll_block_irqs(struct pic_softc *pic, size_t irqbase, uint32_t irq_mask)
 {
-	struct icoll_softc *sc = PICTOSOFTC(pic);
+	struct imx23_icoll_softc *sc = PICTOSOFTC(pic);
 	uint8_t b;
 
 	for (;;) {
 		b = ffs(irq_mask);
 		if (b == 0) break;
 		b--;	/* Zero based index. */
-		ICOLL_CLR_IRQ(sc, irq_base + b);
+		ICOLL_CLR_IRQ(sc, irqbase + b);
 		irq_mask &= ~(1<<b);
 	}
 
@@ -238,19 +241,20 @@ icoll_block_irqs(struct pic_softc *pic, size_t irq_base, uint32_t irq_mask)
 }
 
 static int
-icoll_find_pending_irqs(struct pic_softc *pic)
+imx23_icoll_find_pending_irqs(struct pic_softc *pic)
 {
 	return 0; /* ICOLL HW doesn't provide list of pending interrupts. */
 }
 
 static void
-icoll_establish_irq(struct pic_softc *pic, struct intrsource *is)
+imx23_icoll_establish_irq(struct pic_softc *pic, struct intrsource *is)
 {
 	return; /* Nothing to establish. */
 }
 
 static void
-icoll_source_name(struct pic_softc *pic, int irq, char *is_source, size_t size)
+imx23_icoll_source_name(struct pic_softc *pic, int irq, char *is_source,
+			size_t size)
 {
 	snprintf(is_source, size, "irq %d", irq);
 }
@@ -259,9 +263,9 @@ icoll_source_name(struct pic_softc *pic, int irq, char *is_source, size_t size)
  * Set new interrupt priority level by enabling or disabling IRQ's.
  */
 static void
-icoll_set_priority(struct pic_softc *pic, int newipl)
+imx23_icoll_set_priority(struct pic_softc *pic, int newipl)
 {
-	struct icoll_softc *sc = PICTOSOFTC(pic);
+	struct imx23_icoll_softc *sc = PICTOSOFTC(pic);
 	struct intrsource *is;
 	int i;
 
@@ -285,17 +289,17 @@ icoll_set_priority(struct pic_softc *pic, int newipl)
 }
 
 static bool
-icoll_fdt_intrstr(device_t dev, u_int *specifier, char *buf, size_t buflen)
+imx23_icoll_fdt_intrstr(device_t dev, u_int *specifier, char *buf, size_t bufln)
 {
 	const u_int irq = be32toh(*specifier);
 
-	snprintf(buf, buflen, "icoll irq %d", irq);
+	snprintf(buf, bufln, "icoll irq %d", irq);
 
 	return true;
 }
 
 static void *
-icoll_fdt_establish(device_t dev, u_int *specifier, int ipl, int flags,
+imx23_icoll_fdt_establish(device_t dev, u_int *specifier, int ipl, int flags,
 			 int (*func)(void *), void *arg, const char *xname)
 {
 	const u_int irq = be32toh(*specifier);
@@ -306,7 +310,7 @@ icoll_fdt_establish(device_t dev, u_int *specifier, int ipl, int flags,
 }
 
 static void
-icoll_fdt_disestablish(device_t dev, void *ih)
+imx23_icoll_fdt_disestablish(device_t dev, void *ih)
 {
 	intr_disestablish(ih);
 }
@@ -315,7 +319,7 @@ icoll_fdt_disestablish(device_t dev, void *ih)
  * autoconf(9) callbacks.
  */
 static int
-icoll_match(device_t parent, cfdata_t match, void *aux)
+imx23_icoll_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -323,16 +327,16 @@ icoll_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-icoll_attach(device_t parent, device_t self, void *aux)
+imx23_icoll_attach(device_t parent, device_t self, void *aux)
 {
-	struct icoll_softc * const sc = device_private(self);
+	struct imx23_icoll_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 
 	icoll_sc = sc;
 	sc->sc_iot = faa->faa_bst;
 	sc->sc_pic.pic_maxsources = IRQ_LAST + 1;
-	sc->sc_pic.pic_ops = &icoll_pic_ops;
+	sc->sc_pic.pic_ops = &imx23_icoll_pic_ops;
 	strlcpy(sc->sc_pic.pic_name, device_xname(self),
 		sizeof(sc->sc_pic.pic_name));
 
@@ -347,11 +351,11 @@ icoll_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	icoll_reset(sc);
+	imx23_icoll_reset(sc);
 	pic_add(&sc->sc_pic, 0);
 
 	int error = fdtbus_register_interrupt_controller(self, phandle,
-							 &imx23icoll_fdt_funcs);
+						&imx23_icoll_fdt_funcs);
 	if (error) {
 		aprint_error(
 		    "imx23icoll_fdt: couldn't register with fdtbus: %d\n",
@@ -359,7 +363,7 @@ icoll_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	arm_fdt_irq_set_handler((void (*)(void *))icoll_intr_dispatch);
+	arm_fdt_irq_set_handler((void (*)(void *))imx23_icoll_intr_dispatch);
 
 	aprint_normal("\n");
 }
@@ -370,7 +374,7 @@ icoll_attach(device_t parent, device_t self, void *aux)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 static void
-icoll_reset(struct icoll_softc *sc)
+imx23_icoll_reset(struct imx23_icoll_softc *sc)
 {
 	unsigned int loop;
 

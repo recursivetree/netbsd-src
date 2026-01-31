@@ -91,83 +91,82 @@
 
 #define APBDMA_SOFT_RST_LOOP 455 /* At least 1 us ... */
 
-struct imx23apbdma_fdt_config {
+struct imx23_apbdma_fdt_config {
 	u_int flags;
 	u_int num_channels;
 };
 
-typedef struct apbdma_command {
+struct imx23_apbdma_command {
 	void *next;		/* Physical address. */
 	uint32_t control;
 	void *buffer;		/* Physical address. */
 	uint32_t pio_words[MAX_PIO_WORDS];
-} *apbdma_command_t;
+};
 
-struct apbdma_softc;
-struct apbdma_channel {
+struct imx23_apbdma_softc;
+struct imx23_apbdma_channel {
 	u_int chan_index;
 	void (*chan_cb)(void *);
 	void *chan_cbarg;
-	struct apbdma_softc *chan_parent;
+	struct imx23_apbdma_softc *chan_parent;
 };
 
-typedef struct apbdma_softc {
+struct imx23_apbdma_softc {
 	device_t sc_dev;
 	bus_dma_tag_t sc_dmat;
 	bus_dmamap_t sc_dmamp;
 	bus_space_handle_t sc_ioh;
 	bus_space_tag_t sc_iot;
 	u_int flags;
-	struct apbdma_channel sc_chan[AHB_MAX_DMA_CHANNELS];
+	struct imx23_apbdma_channel sc_chan[AHB_MAX_DMA_CHANNELS];
 	bus_size_t sc_cmd_sz;
-	struct apbdma_command *sc_cmds;
+	struct imx23_apbdma_command *sc_cmds;
 	bus_dma_segment_t sc_ds[1];
-} *apbdma_softc_t;
-
-static int	apbdma_match(device_t, cfdata_t, void *);
-static void	apbdma_attach(device_t, device_t, void *);
-static void 	apbdma_reset(struct apbdma_softc *);
-static void	apbdma_init(struct apbdma_softc *);
-
-static void *	apbdma_fdt_acquire(device_t, const void *, size_t,
-		   		void (*)(void *), void *);
-static void 	apbdma_fdt_release(device_t, void *);
-static int 	apbdma_fdt_transfer(device_t, void *, struct fdtbus_dma_req *);
-static void 	apbdma_fdt_halt(device_t, void *);
-static int	apbdma_intr(void *);
-
-CFATTACH_DECL_NEW(imx23apbdma, sizeof(struct apbdma_softc),
-		  apbdma_match, apbdma_attach, NULL, NULL);
-
-static const struct fdtbus_dma_controller_func apbdma_fdt_dma_funcs = {
-	.acquire=apbdma_fdt_acquire,
-	.release=apbdma_fdt_release,
-	.transfer=apbdma_fdt_transfer,
-	.halt=apbdma_fdt_halt,
 };
 
-static const struct imx23apbdma_fdt_config apbh_config = {
+static int	imx23_apbdma_match(device_t, cfdata_t, void *);
+static void	imx23_apbdma_attach(device_t, device_t, void *);
+static void 	imx23_apbdma_reset(struct imx23_apbdma_softc *);
+static void	imx23_apbdma_init(struct imx23_apbdma_softc *);
+static void *	imx23_apbdma_fdt_acquire(device_t, const void *, size_t,
+		   			 void (*)(void *), void *);
+static void 	imx23_apbdma_fdt_release(device_t, void *);
+static int 	imx23_apbdma_fdt_transfer(device_t, void *,
+			  		  struct fdtbus_dma_req *);
+static void 	imx23_apbdma_fdt_halt(device_t, void *);
+static int	imx23_apbdma_intr(void *);
+
+CFATTACH_DECL_NEW(imx23apbdma, sizeof(struct imx23_apbdma_softc),
+		  imx23_apbdma_match, imx23_apbdma_attach, NULL, NULL);
+
+static const struct fdtbus_dma_controller_func imx23_apbdma_fdt_dma_funcs = {
+	.acquire=imx23_apbdma_fdt_acquire,
+	.release=imx23_apbdma_fdt_release,
+	.transfer=imx23_apbdma_fdt_transfer,
+	.halt=imx23_apbdma_fdt_halt,
+};
+
+static const struct imx23_apbdma_fdt_config imx23_apbh_config = {
 	.flags = F_APBH_DMA,
 	.num_channels = 8,
 };
-static const struct imx23apbdma_fdt_config apbx_config = {
+static const struct imx23_apbdma_fdt_config imx23_apbx_config = {
 	.flags = F_APBX_DMA,
 	.num_channels = 16,
 };
 
 static const struct device_compatible_entry compat_data[] = {
-	{ .compat = "fsl,imx23-dma-apbh", .data = &apbh_config },
-	{ .compat = "fsl,imx23-dma-apbx", .data = &apbx_config },
+	{ .compat = "fsl,imx23-dma-apbh", .data = &imx23_apbh_config },
+	{ .compat = "fsl,imx23-dma-apbx", .data = &imx23_apbx_config },
 	DEVICE_COMPAT_EOL
 };
 
 static void *
-apbdma_fdt_acquire(device_t dev, const void *data, size_t len,
+imx23_apbdma_fdt_acquire(device_t dev, const void *data, size_t len,
 		   void (*cb)(void *), void *cbarg)
 {
-	//TODO: locking?
-	struct apbdma_softc *sc = device_private(dev);
-	struct apbdma_channel *chan;
+	struct imx23_apbdma_softc *sc = device_private(dev);
+	struct imx23_apbdma_channel *chan;
 	const uint32_t *specifier = data;
 
 	// get channel index
@@ -188,20 +187,20 @@ apbdma_fdt_acquire(device_t dev, const void *data, size_t len,
 }
 
 static void
-apbdma_fdt_release(device_t dev, void *priv)
+imx23_apbdma_fdt_release(device_t dev, void *priv)
 {
 	/* do nothing */
 }
 
 static int
-apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
+imx23_apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 {
-	struct apbdma_softc *sc = device_private(dev);
-	struct apbdma_channel *chan = priv;
+	struct imx23_apbdma_softc *sc = device_private(dev);
+	struct imx23_apbdma_channel *chan = priv;
 	uint32_t reg;
 	uint8_t val;
 
-	struct apbdma_command *cmd = &sc->sc_cmds[chan->chan_index];
+	struct imx23_apbdma_command *cmd = &sc->sc_cmds[chan->chan_index];
 
 	if ((req->dreq_dir == FDT_DMA_NO_XFER && req->dreq_nsegs != 0) ||
 	    (req->dreq_dir != FDT_DMA_NO_XFER && req->dreq_nsegs != 1)) {
@@ -246,13 +245,14 @@ apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 	}
 
 	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamp,
-			chan->chan_index * sizeof(struct apbdma_command),
-			sizeof(struct apbdma_command), BUS_DMASYNC_PREWRITE);
+			chan->chan_index * sizeof(struct imx23_apbdma_command),
+			sizeof(struct imx23_apbdma_command),
+			BUS_DMASYNC_PREWRITE);
 
 	/* set the address of the dma command */
 	bus_addr_t phys_cmd_addr =
 	    sc->sc_ds[0].ds_addr +
-	    chan->chan_index * sizeof(struct apbdma_command);
+	    chan->chan_index * sizeof(struct imx23_apbdma_command);
 	if (sc->flags & F_APBH_DMA)
 		reg =
 		    HW_APB_CHN_NXTCMDAR(HW_APBH_CH0_NXTCMDAR, chan->chan_index);
@@ -275,16 +275,16 @@ apbdma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 }
 
 static void
-apbdma_fdt_halt(device_t dev, void *priv)
+imx23_apbdma_fdt_halt(device_t dev, void *priv)
 {
 	/* do nothing */
 }
 
 static int
-apbdma_intr(void *frame)
+imx23_apbdma_intr(void *frame)
 {
-	struct apbdma_channel *chan = frame;
-	struct apbdma_softc *sc = chan->chan_parent;
+	struct imx23_apbdma_channel *chan = frame;
+	struct imx23_apbdma_softc *sc = chan->chan_parent;
 	unsigned int reason = 0;
 
 	/* Check if this was command complete IRQ. */
@@ -341,7 +341,7 @@ apbdma_intr(void *frame)
 }
 
 static int
-apbdma_match(device_t parent, cfdata_t match, void *aux)
+imx23_apbdma_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args *const faa = aux;
 
@@ -349,12 +349,12 @@ apbdma_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-apbdma_attach(device_t parent, device_t self, void *aux)
+imx23_apbdma_attach(device_t parent, device_t self, void *aux)
 {
-	struct apbdma_softc *const sc = device_private(self);
+	struct imx23_apbdma_softc *const sc = device_private(self);
 	struct fdt_attach_args *const faa = aux;
 	const int phandle = faa->faa_phandle;
-	const struct imx23apbdma_fdt_config *config;
+	const struct imx23_apbdma_fdt_config *config;
 	int rsegs;
 	int len;
 	char intrstr[128];
@@ -380,9 +380,8 @@ apbdma_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* initialize DMA */
-	KASSERT(sizeof(struct apbdma_command) %
-		    __alignof(struct apbdma_command) == 0);
-	sc->sc_cmd_sz = AHB_MAX_DMA_CHANNELS * sizeof(struct apbdma_command);
+	sc->sc_cmd_sz =
+	    AHB_MAX_DMA_CHANNELS * sizeof(struct imx23_apbdma_command);
 	if (bus_dmamem_alloc(sc->sc_dmat, sc->sc_cmd_sz, PAGE_SIZE, 0,
 			     sc->sc_ds, 1, &rsegs, BUS_DMA_WAITOK)) {
 		aprint_error(": Unable to allocate DMA memory\n");
@@ -431,7 +430,7 @@ apbdma_attach(device_t parent, device_t self, void *aux)
 			return;
 		}
 		void *ih = fdtbus_intr_establish_xname(
-		    phandle, i, IPL_SCHED, FDT_INTR_MPSAFE, apbdma_intr,
+		    phandle, i, IPL_SCHED, FDT_INTR_MPSAFE, imx23_apbdma_intr,
 		    &sc->sc_chan[i], device_xname(self));
 		if (ih == NULL) {
 			aprint_error_dev(
@@ -446,10 +445,11 @@ apbdma_attach(device_t parent, device_t self, void *aux)
 		sc->sc_chan[i].chan_index = i;
 		sc->sc_chan[i].chan_parent = sc;
 	}
-	apbdma_reset(sc);
-	apbdma_init(sc);
+	imx23_apbdma_reset(sc);
+	imx23_apbdma_init(sc);
 
-	fdtbus_register_dma_controller(self, phandle, &apbdma_fdt_dma_funcs);
+	fdtbus_register_dma_controller(self, phandle,
+				       &imx23_apbdma_fdt_dma_funcs);
 
 	if (sc->flags & F_APBH_DMA) {
 		aprint_normal(": type=apbh\n");
@@ -464,7 +464,7 @@ apbdma_attach(device_t parent, device_t self, void *aux)
  * Inspired by i.MX23 RM "39.3.10 Correct Way to Soft Reset a Block"
  */
 void
-apbdma_reset(struct apbdma_softc *sc)
+imx23_apbdma_reset(struct imx23_apbdma_softc *sc)
 {
 	unsigned int loop;
 
@@ -509,7 +509,7 @@ apbdma_reset(struct apbdma_softc *sc)
  * Initialize APB{H,X}DMA block.
  */
 void
-apbdma_init(struct apbdma_softc *sc)
+imx23_apbdma_init(struct imx23_apbdma_softc *sc)
 {
 
 	if (sc->flags & F_APBH_DMA) {

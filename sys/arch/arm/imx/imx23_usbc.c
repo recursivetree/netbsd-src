@@ -55,14 +55,14 @@ struct imx23_imxusbc_softc {
 	int sc_phandle;
 };
 
-static int imx23usbc_match(device_t, cfdata_t, void *);
-static void imx23usbc_attach(device_t, device_t, void *);
+static int imx23_usbc_match(device_t, cfdata_t, void *);
+static void imx23_usbc_attach(device_t, device_t, void *);
 
-static void imx23usbc_init(struct imxehci_softc *, uintptr_t);
-static void * imx23usbc_intr_establish(struct imxehci_softc *, uintptr_t);
+static void imx23_usbc_init(struct imxehci_softc *, uintptr_t);
+static void * imx23_usbc_intr_establish(struct imxehci_softc *, uintptr_t);
 
 CFATTACH_DECL_NEW(imxusbc, sizeof(struct imx23_imxusbc_softc),
-		  imx23usbc_match, imx23usbc_attach, NULL, NULL);
+		  imx23_usbc_match, imx23_usbc_attach, NULL, NULL);
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "fsl,imx23-usb" },
@@ -70,7 +70,7 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-imx23usbc_match(device_t parent, cfdata_t cf, void *aux)
+imx23_usbc_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -78,7 +78,7 @@ imx23usbc_match(device_t parent, cfdata_t cf, void *aux)
 }
 
 static void
-imx23usbc_attach(device_t parent, device_t self, void *aux)
+imx23_usbc_attach(device_t parent, device_t self, void *aux)
 {
 	struct imx23_imxusbc_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
@@ -112,8 +112,8 @@ imx23usbc_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_imxusbc.sc_ehci_size = IMXUSB_EHCI_SIZE;
 	sc->sc_imxusbc.sc_ehci_offset = IMXUSB_EHCI_SIZE;
-	sc->sc_imxusbc.sc_init_md_hook = imx23usbc_init;
-	sc->sc_imxusbc.sc_intr_establish_md_hook = imx23usbc_intr_establish;
+	sc->sc_imxusbc.sc_init_md_hook = imx23_usbc_init;
+	sc->sc_imxusbc.sc_intr_establish_md_hook = imx23_usbc_intr_establish;
 	sc->sc_imxusbc.sc_setup_md_hook = NULL;
 
 	aprint_normal("\n");
@@ -129,13 +129,13 @@ imx23usbc_attach(device_t parent, device_t self, void *aux)
 }
 
 static void
-imx23usbc_init(struct imxehci_softc *sc, uintptr_t data)
+imx23_usbc_init(struct imxehci_softc *sc, uintptr_t data)
 {
 	sc->sc_iftype = IMXUSBC_IF_UTMI;
 }
 
 static void *
-imx23usbc_intr_establish(struct imxehci_softc *sc, uintptr_t data)
+imx23_usbc_intr_establish(struct imxehci_softc *sc, uintptr_t data)
 {
 	struct imx23_imxusbc_softc *ifsc = (struct imx23_imxusbc_softc *)
 					     sc->sc_usbc;

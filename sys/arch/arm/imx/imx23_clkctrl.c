@@ -41,17 +41,17 @@
 #include <arm/imx/imx23_clkctrlreg.h>
 #include <arm/imx/imx23var.h>
 
-struct clkctrl_softc {
+struct imx23_clkctrl_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_hdl;
 };
 
-static int	clkctrl_match(device_t, cfdata_t, void *);
-static void	clkctrl_attach(device_t, device_t, void *);
+static int	imx23_clkctrl_match(device_t, cfdata_t, void *);
+static void	imx23_clkctrl_attach(device_t, device_t, void *);
 
-CFATTACH_DECL_NEW(imx23clkctrl, sizeof(struct clkctrl_softc),
-		  clkctrl_match, clkctrl_attach, NULL, NULL);
+CFATTACH_DECL_NEW(imx23clkctrl, sizeof(struct imx23_clkctrl_softc),
+		  imx23_clkctrl_match, imx23_clkctrl_attach, NULL, NULL);
 
 #define CLKCTRL_RD(sc, reg)                                                 \
         bus_space_read_4(sc->sc_iot, sc->sc_hdl, (reg))
@@ -67,7 +67,7 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-clkctrl_match(device_t parent, cfdata_t match, void *aux)
+imx23_clkctrl_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
 
@@ -75,9 +75,9 @@ clkctrl_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static void
-clkctrl_attach(device_t parent, device_t self, void *aux)
+imx23_clkctrl_attach(device_t parent, device_t self, void *aux)
 {
-	struct clkctrl_softc * const sc = device_private(self);
+	struct imx23_clkctrl_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 

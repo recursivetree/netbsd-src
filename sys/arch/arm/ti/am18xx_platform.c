@@ -1,7 +1,7 @@
 /* $NetBSD $ */
 
 /*-
- * Copyright (c) 2025 The NetBSD Foundation, Inc.
+ * Copyright (c) 2026 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -34,19 +34,17 @@
 #include <sys/cdefs.h>
 __KERNEL_RCSID(0, "$NetBSD $");
 
-#include <dev/fdt/fdtvar.h>
-#include <dev/fdt/fdt_platform.h>
-
-#include <arm/fdt/arm_fdtvar.h>
-
 #include <uvm/uvm_extern.h>
 
+#include <dev/fdt/fdt_platform.h>
+#include <dev/fdt/fdtvar.h>
 #include <dev/ic/comreg.h>
 
 #include <arch/evbarm/fdt/platform.h>
+#include <arm/fdt/arm_fdtvar.h>
 
 /*
- * Platform code for the TI AM18XX family of SOCs (AM1806, AM1808). In linux
+ * Platform code for the TI AM18XX family of SOCs (AM1808, AM1810). In linux
  * land and in the device trees, this platform is sometimes also called DA830
  * and DA850 (Davinci 8XX) because their silicon has a lot in common.
  * */
@@ -57,6 +55,16 @@ __KERNEL_RCSID(0, "$NetBSD $");
 #define AM18XX_INTC_VBASE (AM18XX_IO_VBASE + AM18XX_IO_SIZE)
 #define AM18XX_INTC_PBASE 0xfffee000
 #define AM18XX_INTC_SIZE 0x2000
+
+#define AM18XX_TIMER1_BASE 0x01C21000
+#define AM18XX_TIMER1_SIZE 0x1000
+#define AM18XX_TIMER1_TIM12 0x10
+#define AM18XX_TIMER1_TCR 0x20
+#define AM18XX_TIMER1_TGCR 0x24
+
+#define AM18XX_TIMER_TCR_ENAMODE12_CONTINUOUS 0x80
+#define AM18XX_TIMER_TGCR_TIMMODE_32_UNCHAINED 0x4
+#define AM18XX_TIMER_TGCR_TIM12EN 1
 
 
 void am18xx_platform_early_putchar(char);
@@ -109,7 +117,49 @@ am18xx_platform_init_attach_args(struct fdt_attach_args *faa)
 static void
 am18xx_platform_delay(u_int n)
 {
-	panic("am18xx_platform_delay not implemented");
+	/* Use Timer1 for delay. Timer0 is used*/
+	static bus_space_tag_t bst = &arm_generic_bs_tag;
+	static bus_space_handle_t bsh = 0;
+
+	if(bsh == 0) {
+		/* map Timer1 */
+		bus_space_map(bst, AM18XX_TIMER1_BASE, AM18XX_TIMER1_SIZE, 0,
+			      &bsh);
+
+		/* disable counter to allow changing mode */
+		bus_space_write_4(bst, bsh, AM18XX_TIMER1_TCR, 0);
+		/* set mode to 32-bit unchained */
+		bus_space_write_4(bst, bsh, AM18XX_TIMER1_TGCR,
+				  AM18XX_TIMER_TGCR_TIMMODE_32_UNCHAINED |
+				  AM18XX_TIMER_TGCR_TIM12EN);
+		/* load period registers with maximum period */
+		bus_space_write_4(bst, bsh, AM18XX_TIMER1_PRD12, 0xFFFFFFFF);
+		/* enable timer */
+		bus_space_write_4(bst, bsh, AM18XX_TIMER1_TCR,
+				  AM18XX_TIMER_TCR_ENAMODE12_CONTINUOUS);
+
+	}
+
+	/*
+	 * The counter is driven by PLL0_AUXCLK, which is taken from OSCIN.
+	 * On the EV3, that is 24MHz.
+	 *
+	 * n is in microseconds (us)
+	 *
+	 * TODO: The frequency is board-dependent and we should better load it from the FDT.
+	 */
+	long ticks = n * (24000000 / 1000000);
+
+	uint32_t prev, cur;
+	prev = bus_space_read_4(bst, bsh, AM18XX_TIMER1_TIM12);
+	while (ticks > 0) {
+		cur = bus_space_read_4(bst, bsh, AM18XX_TIMER1_TIM12);
+		if (cur >= prev)
+			ticks -= (cur - prev);
+		else
+			ticks -= (UINT32_MAX - cur + prev);
+		prev = cur;
+	}
 }
 
 static void

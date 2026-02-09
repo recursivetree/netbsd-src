@@ -59,12 +59,21 @@ __KERNEL_RCSID(0, "$NetBSD $");
 #define AM18XX_TIMER1_BASE 0x01C21000
 #define AM18XX_TIMER1_SIZE 0x1000
 #define AM18XX_TIMER1_TIM12 0x10
+#define AM18XX_TIMER1_TIM34 0x14
+#define AM18XX_TIMER1_PRD12 0x18
+#define AM18XX_TIMER1_PRD34 0x1C
 #define AM18XX_TIMER1_TCR 0x20
 #define AM18XX_TIMER1_TGCR 0x24
+#define AM18XX_TIMER1_WDTCR 0x28
 
 #define AM18XX_TIMER_TCR_ENAMODE12_CONTINUOUS 0x80
-#define AM18XX_TIMER_TGCR_TIMMODE_32_UNCHAINED 0x4
+#define AM18XX_TIMER_TGCR_TIMMODE32_UNCHAINED 0x4
+#define AM18XX_TIMER_TGCR_TIMMODE64_WATCHDOG 0x8
 #define AM18XX_TIMER_TGCR_TIM12EN 1
+#define AM18XX_TIMER_TGCR_TIM34EN 2
+#define AM18XX_TIMER_WDTCR_WDEN 1
+#define AM18XX_TIMER_WDTCR_KEY0 0xa5c60000
+#define AM18XX_TIMER_WDTCR_KEY1 0xda7e0000
 
 
 void am18xx_platform_early_putchar(char);
@@ -130,7 +139,7 @@ am18xx_platform_delay(u_int n)
 		bus_space_write_4(bst, bsh, AM18XX_TIMER1_TCR, 0);
 		/* set mode to 32-bit unchained */
 		bus_space_write_4(bst, bsh, AM18XX_TIMER1_TGCR,
-				  AM18XX_TIMER_TGCR_TIMMODE_32_UNCHAINED |
+				  AM18XX_TIMER_TGCR_TIMMODE32_UNCHAINED |
 				  AM18XX_TIMER_TGCR_TIM12EN);
 		/* load period registers with maximum period */
 		bus_space_write_4(bst, bsh, AM18XX_TIMER1_PRD12, 0xFFFFFFFF);
@@ -162,10 +171,37 @@ am18xx_platform_delay(u_int n)
 	}
 }
 
+/*
+ * To reset the am18xx, you have to crash the watchdog.
+ */
 static void
 am18xx_platform_reset(void)
 {
-	panic("am18xx_platform_reset not implemented");
+	/* map TIMER1 */
+	bus_space_tag_t bst = &arm_generic_bs_tag;
+	bus_space_handle_t bsh = 0;
+	bus_space_map(bst, AM18XX_TIMER1_BASE, AM18XX_TIMER1_SIZE, 0, &bsh);
+
+	/* disable counter to allow changing mode */
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_TCR, 0);
+	/* set mode to watchdog unchained */
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_TGCR,
+			  AM18XX_TIMER_TGCR_TIMMODE64_WATCHDOG |
+			  AM18XX_TIMER_TGCR_TIM12EN |
+			  AM18XX_TIMER_TGCR_TIM34EN);
+	/* set counter and reload registers */
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_TIM12, 0);
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_TIM34, 0);
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_PRD12, 0);
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_PRD34, 0);
+
+	/* execute the watchdog enable sequence */
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_WDTCR, AM18XX_TIMER_WDTCR_KEY0 | AM18XX_TIMER_WDTCR_WDEN);
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_WDTCR, AM18XX_TIMER_WDTCR_KEY1 | AM18XX_TIMER_WDTCR_WDEN);
+	/* trigger a reset by writing an invalid value to WDTCR*/
+	bus_space_write_4(bst, bsh, AM18XX_TIMER1_WDTCR, 0xaffe);
+
+	/* NOTREACHED */
 }
 
 static const struct fdt_platform am18xx_platform = {

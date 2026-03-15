@@ -48,6 +48,7 @@ struct am18xx_pllc_softc;
 struct am18xx_pllc_clk {
 	struct clk clk_base; /* must be first */
 	u_int (*get_rate)(struct am18xx_pllc_softc *, struct am18xx_pllc_clk *);
+	u_int clk_index;
 };
 
 struct am18xx_pllc_config {
@@ -80,16 +81,31 @@ static struct clk *	am18xx_pllc_clk_get_parent(void *, struct clk *);
 CFATTACH_DECL_NEW(am18xxpllc, sizeof(struct am18xx_pllc_softc),
 		  am18xx_pllc_match, am18xx_pllc_attach, NULL, NULL);
 
-#define	PSC_READ(sc, reg)					\
+#define AM18XX_PLLC_PLLCTL 0x100
+#define AM18XX_PLLC_PLLM 0x110
+#define AM18XX_PLLC_PREDIV 0x114
+#define AM18XX_PLLC_PLLDIV1 0x118
+#define AM18XX_PLLC_POSTDIV 0x128
+#define AM18XX_PLLC_PLLDIV4 0x160
+
+#define AM18XX_PLLC_PLLCTL_PLLEN __BIT(0)
+#define AM18XX_PLLC_PLLCTL_EXTCLKSRC __BIT(9)
+#define AM18XX_PLLC_PLLM_MULTIPLIER __BITS(4,0)
+#define AM18XX_PLLC_PREDIV_RATIO __BITS(4,0)
+#define AM18XX_PLLC_POSTDIV_RATIO __BITS(4,0)
+#define AM18XX_PLLC_PLLDIV_RATIO __BITS(4,0)
+
+#define	PLLC_READ(sc, reg)					\
 	bus_space_read_4((sc)->sc_bst, (sc)->sc_bsh, reg)
-#define	PSC_WRITE(sc, reg, val)				\
+#define	PLLC_WRITE(sc, reg, val)				\
 	bus_space_write_4((sc)->sc_bst, (sc)->sc_bsh, reg, val)
 
 #define PLLC_CLK(_i, _name, _rate) 					\
 	{								\
 		.clk_base.name = (_name),				\
+		.clk_base.flags = 0,					\
 		.get_rate = (_rate),					\
-		.clk_base.flags = 0					\
+		.clk_index = (_i),					\
 	}
 
 static struct am18xx_pllc_clk am18xx_pllc_pll0_auxclk =
@@ -166,14 +182,48 @@ static u_int
 am18xx_pllc_get_sysclk_rate(struct am18xx_pllc_softc *sc,
 			    struct am18xx_pllc_clk *clk)
 {
-	return 0;
+	uint32_t pllctl_reg = PLLC_READ(sc, AM18XX_PLLC_PLLCTL);
+
+	uint32_t prediv_reg = PLLC_READ(sc, AM18XX_PLLC_PREDIV);
+	uint32_t prediv_ratio = (prediv_reg & AM18XX_PLLC_PREDIV_RATIO)+1;
+
+	uint32_t pllm_reg = PLLC_READ(sc, AM18XX_PLLC_PLLM);
+	uint32_t pllm_multiplier = (pllm_reg & AM18XX_PLLC_PLLM_MULTIPLIER)+1;
+
+	uint32_t postdiv_reg = PLLC_READ(sc, AM18XX_PLLC_POSTDIV);
+	uint32_t postdiv_ratio = (postdiv_reg & AM18XX_PLLC_POSTDIV_RATIO)+1;
+
+	uint32_t plldiv_regaddr;
+	if(clk->clk_index <= 2) {
+		plldiv_regaddr = AM18XX_PLLC_PLLDIV1 + 4 * clk->clk_index;
+	} else {
+		plldiv_regaddr = AM18XX_PLLC_PLLDIV4 + 4 * (clk->clk_index - 3);
+	}
+	uint32_t plldiv_reg = PLLC_READ(sc, plldiv_regaddr);
+	uint32_t plldiv_ratio = (plldiv_reg & AM18XX_PLLC_PLLDIV_RATIO)+1;
+
+	u_int ref_clk_rate = clk_get_rate(sc->sc_ref_clk);
+
+	if(pllctl_reg & AM18XX_PLLC_PLLCTL_PLLEN) {
+		/* PLL enabled */
+		ref_clk_rate /= prediv_ratio;
+		ref_clk_rate *= pllm_multiplier;
+		ref_clk_rate /= postdiv_ratio;
+	} else {
+		/* bypass mode (ensure we aren't using the other PLL)*/
+		KASSERT((pllctl_reg & AM18XX_PLLC_PLLCTL_EXTCLKSRC) == 0);
+	}
+
+	ref_clk_rate /= plldiv_ratio;
+
+	return ref_clk_rate;
 }
 
 static u_int
 am18xx_pllc_get_auxclk_rate(struct am18xx_pllc_softc *sc,
 			    struct am18xx_pllc_clk *clk)
 {
-	return 0;
+	return clk_get_rate(sc->sc_ref_clk);
 }
 
 static struct clk *
@@ -185,7 +235,7 @@ am18xx_pllc_decode(device_t dev, int cc_phandle, const void *data, size_t len)
 	if (cc_phandle == sc->sc_sysclk_phandle) {
 		if (len != 4)
 			return NULL;
-		const u_int clock_index = be32toh(cells[0]);
+		const u_int clock_index = be32toh(cells[0]) - 1;
 		if (clock_index >= sc->sc_config->num_sysclk) {
 			return NULL;
 		}

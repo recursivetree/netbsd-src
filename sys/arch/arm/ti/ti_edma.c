@@ -151,9 +151,18 @@ edma_attach(device_t parent, device_t self, void *aux)
 		ch->ch_nparams = 0;
 	}
 
-	if (ti_prcm_enable_hwmod(phandle, 0) != 0) {
-		aprint_error_dev(self, "couldn't enable module\n");
-		return;
+	if (of_hasprop(phandle, "power-domains")) {
+		/* clocks are configured through the fdt system */
+		if (fdtbus_powerdomain_enable(phandle) != 0) {
+			aprint_error(": couldn't enable powerdomain\n");
+			return;
+		}
+	} else {
+		/* clock are configured through the prcm system  */
+		if (ti_prcm_enable_hwmod(phandle, 0) != 0) {
+			aprint_error(": couldn't enable module\n");
+			return;
+		}
 	}
 
 	edma_init(sc);

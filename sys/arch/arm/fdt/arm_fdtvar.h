@@ -54,6 +54,7 @@ void    arm_fdt_cpu_hatch_register(void *, void (*)(void *, struct cpu_info *));
 void    arm_fdt_cpu_hatch(struct cpu_info *);
 
 void	arm_fdt_timer_register(void (*)(void));
+void	arm_fdt_timer_register_setstatclockrate(void (*)(int));
 
 void	arm_fdt_irq_set_handler(void (*)(void *));
 void	arm_fdt_irq_handler(void *);

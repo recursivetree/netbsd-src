@@ -82,6 +82,7 @@ defflag  opt_arm_bus_space.h	__BUS_SPACE_HAS_STREAM_METHODS
 
 # Timer options
 defflag opt_arm_timer.h		__HAVE_GENERIC_CPU_INITCLOCKS
+defflag opt_arm_timer.h		__HAVE_GENERIC_SETSTATCLOCKRATE
 
 # Start code option
 defflag opt_arm_start.h		__HAVE_GENERIC_START

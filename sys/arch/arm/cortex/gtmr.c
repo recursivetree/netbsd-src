@@ -411,10 +411,13 @@ gtmr_intr(void *arg)
 	return 1;
 }
 
+#ifndef __HAVE_GENERIC_SETSTATCLOCKRATE
 void
 setstatclockrate(int newhz)
 {
+	/* use hardclock */
 }
+#endif
 
 static u_int
 gtmr_get_timecount(struct timecounter *tc)

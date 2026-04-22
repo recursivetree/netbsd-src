@@ -362,14 +362,12 @@ a9tmr_intr(void *arg)
 	return 1;
 }
 
-/* XXX This conflicts with gtmr, hence the temporary weak alias kludge */
-#if 1
-void a9tmr_setstatclockrate(int);
+#ifndef __HAVE_GENERIC_SETSTATCLOCKRATE
 void
-a9tmr_setstatclockrate(int newhz)
+setstatclockrate(int newhz)
 {
+	/* use hardclock */
 }
-__weak_alias(setstatclockrate, a9tmr_setstatclockrate);
 #endif
 
 static u_int

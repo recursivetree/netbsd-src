@@ -72,7 +72,7 @@ __KERNEL_RCSID(0, "$NetBSD: sdmmc.c,v 1.45 2026/01/09 22:54:34 jmcneill Exp $");
 #include <dev/sdmmc/sdmmcvar.h>
 
 #ifdef SDMMC_DEBUG
-int sdmmcdebug = 0;
+int sdmmcdebug = 1000;
 static void sdmmc_dump_command(struct sdmmc_softc *, struct sdmmc_command *);
 #define DPRINTF(n,s)	do { if ((n) <= sdmmcdebug) printf s; } while (0)
 #else

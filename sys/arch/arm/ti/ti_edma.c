@@ -87,6 +87,10 @@ static void edma_write_param(struct edma_softc *,
 static bool edma_bit_isset(uint32_t *, unsigned int);
 static void edma_bit_set(uint32_t *, unsigned int);
 static void edma_bit_clr(uint32_t *, unsigned int);
+static void * edma_fdt_acquire(device_t, const void *, size_t,
+    void (*)(void *), void *);
+static struct edma_channel *edma_channel_alloc_internal(struct edma_softc *,
+    enum edma_type, unsigned int, void (*)(void *), void *);
 
 CFATTACH_DECL_NEW(ti_edma, sizeof(struct edma_softc),
     edma_match, edma_attach, NULL, NULL);
@@ -95,6 +99,14 @@ CFATTACH_DECL_NEW(ti_edma, sizeof(struct edma_softc),
 	bus_space_read_4((sc)->sc_iot, (sc)->sc_ioh, (reg))
 #define EDMA_WRITE(sc, reg, val) \
 	bus_space_write_4((sc)->sc_iot, (sc)->sc_ioh, (reg), (val))
+
+/* we only use the fdt system to get the controller to consumers */
+static const struct fdtbus_dma_controller_func edma_fdt_funcs = {
+	.acquire = edma_fdt_acquire,
+	.release = NULL, /* unimplemented*/
+	.transfer = NULL, /* unimplemented*/
+	.halt = NULL, /* unimplemented*/
+};
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "ti,edma3-tpcc" },
@@ -174,6 +186,8 @@ edma_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	aprint_normal_dev(self, "interrupting on %s\n", intrstr);
+
+	fdtbus_register_dma_controller(self, phandle, &edma_fdt_funcs);
 }
 
 /*
@@ -287,27 +301,51 @@ edma_intr(void *priv)
 	return 1;
 }
 
-/*
- * Allocate a DMA channel. Currently only DMA types are supported, not QDMA.
- * Returns NULL on failure.
- */
+static void *
+edma_fdt_acquire(device_t dev, const void *data, size_t len, void (*cb)(void *),
+    void *cbarg)
+{
+	struct edma_softc *sc = device_private(dev);
+	const uint32_t *specifier = data;
+
+	/* get channel index */
+	if (len != 8) {
+		return NULL;
+	}
+	const u_int chan_index = be32toh(specifier[0]);
+
+	return edma_channel_alloc_internal(sc, EDMA_TYPE_DMA, chan_index, cb,
+	    cbarg);
+}
+
 struct edma_channel *
 edma_channel_alloc(enum edma_type type, unsigned int drq,
     void (*cb)(void *), void *cbarg)
 {
 	struct edma_softc *sc;
-	device_t dev;
+	device_t dev = device_find_by_driver_unit("tiedma", 0);
+	if (dev == NULL) {
+		return NULL;
+	}
+	sc = device_private(dev);
+
+	return edma_channel_alloc_internal(sc, type, drq, cb, cbarg);
+}
+
+/*
+ * Allocate a DMA channel. Currently only DMA types are supported, not QDMA.
+ * Returns NULL on failure.
+ */
+struct edma_channel *
+edma_channel_alloc_internal(struct edma_softc *sc, enum edma_type type,
+    unsigned int drq, void (*cb)(void *), void *cbarg)
+{
 	struct edma_channel *ch = NULL;
 
 	KASSERT(drq < __arraycount(sc->sc_dma));
 	KASSERT(type == EDMA_TYPE_DMA);	/* QDMA not implemented */
 	KASSERT(cb != NULL);
 	KASSERT(cbarg != NULL);
-
-	dev = device_find_by_driver_unit("tiedma", 0);
-	if (dev == NULL)
-		return NULL;
-	sc = device_private(dev);
 
 	mutex_enter(&sc->sc_lock);
 	if (!edma_bit_isset(sc->sc_dmamask, drq)) {
@@ -498,6 +536,7 @@ edma_channel_index(struct edma_channel *ch)
 {
 	return ch->ch_index;
 }
+
 
 void
 edma_dump(struct edma_channel *ch)

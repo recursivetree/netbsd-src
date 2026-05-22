@@ -47,7 +47,7 @@
 #define	SDMMC_READ(sc, reg)					\
 	bus_space_read_4((sc)->sc_bst, (sc)->sc_bsh, reg)
 #define	SDMMC_WRITE(sc, reg, val)				\
-	printf("TRACING %x %x\n", (uint32_t)(reg), (uint32_t)(val));bus_space_write_4((sc)->sc_bst, (sc)->sc_bsh, reg, val)
+	bus_space_write_4((sc)->sc_bst, (sc)->sc_bsh, reg, val)
 
 #define AM18XX_SDMMC_MMCCTL 0x0
 #define AM18XX_SDMMC_MMCCLK 0x4
@@ -77,6 +77,9 @@
 #define AM18XX_SDMMC_MMCCLK_CLKEN	__BIT(8)
 #define AM18XX_SDMMC_MMCCLK_DIV4	__BIT(9)
 
+#define AM18XX_SDMMC_MMCST0_DATDNE	__BIT(0)
+#define AM18XX_SDMMC_MMCST0_BSYDNE	__BIT(1)
+#define AM18XX_SDMMC_MMCST0_RSPDNE	__BIT(2)
 #define AM18XX_SDMMC_MMCST0_TOUTRD	__BIT(3)
 #define AM18XX_SDMMC_MMCST0_TOUTRS	__BIT(4)
 #define AM18XX_SDMMC_MMCST0_CRCWR	__BIT(5)
@@ -102,7 +105,6 @@
 #define AM18XX_SDMMC_MMCIM_EDRRDY	__BIT(10)
 #define AM18XX_SDMMC_MMCIM_EDATED	__BIT(11)
 #define AM18XX_SDMMC_MMCIM_ETRNDNE	__BIT(12)
-#define AM18XX_SDMMC_MMCIM_ECCS		__BIT(13)
 
 #define AM18XX_SDMMC_MMCCMD_CMD		__BITS(5,0)
 #define AM18XX_SDMMC_MMCCMD_PPLEN	__BIT(7)
@@ -129,6 +131,7 @@ struct am18xx_sdmmc_softc {
 	device_t sc_sdmmc;
 	kmutex_t sc_lock;
 	kcondvar_t sc_intr_cv;
+	uint32_t sc_fired_irqs;
 	bool sc_irq_wait;
 	bool sc_opendrain;
 	bool sc_firstcmd;
@@ -208,14 +211,12 @@ am18xx_sdmmc_host_reset(sdmmc_chipset_handle_t sch)
 static uint32_t
 am18xx_sdmmc_host_ocr(sdmmc_chipset_handle_t sch)
 {
-	printf("am18xx_sdmmc_host_ocr\n");
 	return MMC_OCR_3_2V_3_3V;
 }
 
 static int
 am18xx_sdmmc_host_maxblklen(sdmmc_chipset_handle_t sch)
 {
-	printf("am18xx_sdmmc_host_maxblklen\n");
 	return 512; /* todo: try if it likes non-power-of-2s like the actual limit 4095 */
 }
 
@@ -245,20 +246,33 @@ am18xx_sdmmc_bus_clock(sdmmc_chipset_handle_t sch, int clock)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
 
-	u_int ref_clk = clk_get_rate(sc->sc_clk);
+	printf("am18xx_sdmmc_bus_clock %d\n", clock);
 
-	u_int rt = (ref_clk / (1000 * clock) - 2) / 2;
-	u_int resulting_rate = ref_clk / (2*(rt+1));
-	if (resulting_rate > clock * 1000) {
-		rt++;
+	if (clock > 0) {
+		u_int ref_clk = clk_get_rate(sc->sc_clk);
+
+		u_int rt = (ref_clk / (1000 * clock) / 2) - 1;
+		u_int resulting_rate = ref_clk / (2 * (rt + 1));
+		if (resulting_rate > clock * 1000) {
+			rt++;
+		}
+		if (rt > 255) {
+			rt = 255;
+		}
+		if (rt < 0) {
+			rt = 0;
+		}
+		resulting_rate = ref_clk / (2 * (rt + 1));
+
+		aprint_normal_dev(sc->sc_dev,
+		    "running at %d Hz, want %d Hz, %x\n", resulting_rate,
+		    1000 * clock, rt);
+
+
+		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, rt | AM18XX_SDMMC_MMCCLK_CLKEN);
+	} else {
+		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, 0);
 	}
-	resulting_rate = ref_clk / (2*(rt+1));
-
-	aprint_normal_dev(sc->sc_dev, "running at %d Hz, want %d Hz, %x\n", resulting_rate, 1000*clock, rt);
-
-	uint32_t regval = SDMMC_READ(sc, AM18XX_SDMMC_MMCCLK);
-	regval = (regval & (~AM18XX_SDMMC_MMCCLK_CLKRT)) | rt;
-	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, regval);
 
 	return 0;
 }
@@ -297,10 +311,12 @@ am18xx_sdmmc_bus_rod(sdmmc_chipset_handle_t sch, int rod)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
 
-	printf("am18xx_sdmmc_bus_rod disabled %d\n", rod);
-
 	mutex_enter(&sc->sc_lock);
-	sc->sc_opendrain = false;
+	if (rod) {
+		sc->sc_opendrain = true;
+	} else {
+		sc->sc_opendrain = false;
+	}
 	mutex_exit(&sc->sc_lock);
 
 	return 0;
@@ -309,33 +325,28 @@ am18xx_sdmmc_bus_rod(sdmmc_chipset_handle_t sch, int rod)
 static void
 am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t sch, int irq)
 {
-	/* do nothing */
+	struct am18xx_sdmmc_softc *sc = sch;
+	aprint_error_dev(sc->sc_dev, "SDIO interrupts not implemented\n");
 }
 
 static void
 am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t sch)
 {
-	/* do nothing */
+	struct am18xx_sdmmc_softc *sc = sch;
+	aprint_error_dev(sc->sc_dev, "SDIO interrupts not implemented\n");
 }
 
 static void
 am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 {
-	printf("am18xx_sdmmc_exec_command cmd=%d flags=%x\n", cmd->c_opcode, cmd->c_flags);
-
 	struct am18xx_sdmmc_softc *sc = sch;
 	mutex_enter(&sc->sc_lock);
 
 	/* wait for the card to be no longer busy */
 	while (SDMMC_READ(sc, AM18XX_SDMMC_MMCST1) & AM18XX_SDMMC_MMCST1_BUSY) {
 		printf("busy_delay\n");
-		delay(1); // TODO: timeout
+		delay(10); // TODO: timeout
 	}
-
-	// DEBUG: print status
-	printf("status ST0=%x ST1=%x TOR=%x\n",SDMMC_READ(sc, AM18XX_SDMMC_MMCST0),SDMMC_READ(sc, AM18XX_SDMMC_MMCST1),SDMMC_READ(sc, AM18XX_SDMMC_MMCTOR));
-	printf("MMCCTL=%x\n",SDMMC_READ(sc, AM18XX_SDMMC_MMCCTL));
-	// end debug
 
 	/* write block size settings */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCBLEN, cmd->c_blklen);
@@ -356,12 +367,16 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	}
 	uint32_t command_type;
 	if (!ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
+		/* no response */
 		command_type = AM18XX_SDMMC_MMCCMD_RSPFMT_R0;
 	} else if (ISSET(cmd->c_flags, SCF_RSP_136)) {
+		/* 136 bits, CRC */
 		command_type = AM18XX_SDMMC_MMCCMD_RSPFMT_R2;
 	} else if (ISSET(cmd->c_flags, SCF_RSP_CRC)) {
+		/* 48 bits, CRC */
 		command_type = AM18XX_SDMMC_MMCCMD_RSPFMT_R1456;
 	} else {
+		/* 48 bits, no CRC */
 		command_type = AM18XX_SDMMC_MMCCMD_RSPFMT_R3;
 	}
 	command |= __SHIFTIN(command_type, AM18XX_SDMMC_MMCCMD_RSPFMT);
@@ -376,7 +391,9 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	if(sc->sc_firstcmd) {
 		command |= AM18XX_SDMMC_MMCCMD_INITCK;
 	}
-	//command |= AM18XX_SDMMC_MMCCMD_DMATRIG; /* TODO: check if this really needs to be always set. This looks wrong */
+
+	printf("datalen is %d\n", cmd->c_datalen);
+	KASSERT(cmd->c_datalen == 0);
 
 	/* write command arguments */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x1FFF);
@@ -385,21 +402,31 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	sc->sc_irq_wait = true;
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCMD, command);
 
+	/* wait for a response */
 	while (sc->sc_irq_wait) {
 		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
 	}
 
-	/* deal with the response */
+	/* check if we got an error */
+	if (sc->sc_fired_irqs & AM18XX_SDMMC_MMCST0_ERRMASK) {
+		if (sc->sc_fired_irqs & (AM18XX_SDMMC_MMCST0_TOUTRS | AM18XX_SDMMC_MMCST0_TOUTRD)) {
+			cmd->c_error = ETIMEDOUT;
+		} else {
+			cmd->c_error = EIO;
+		}
 
-	printf("irq condvar is over \n");
-
-	uint32_t fired_intr = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-	if ((fired_intr & AM18XX_SDMMC_MMCST0_ERRMASK) != 0) {
-		cmd->c_error = EIO; // TODO: split into timeout and IO error
-		printf("got an error: %x\n", fired_intr);
+		printf("got an error: %x\n", sc->sc_fired_irqs);
 		goto cleanup;
+	} else if (sc->sc_fired_irqs & AM18XX_SDMMC_MMCST0_RSPDNE) {
+		/* everything okay */
+	} else {
+		/* unexpected interrupt */
+		aprint_error_dev(sc->sc_dev, "unexpected interrupt %x\n", sc->sc_fired_irqs);
+
+		cmd->c_error = EIO;
 	}
 
+	/* no error; read the response */
 	if (cmd->c_flags & SCF_RSP_PRESENT) {
 		cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
 
@@ -409,10 +436,6 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 			cmd->c_resp[3] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP01);
 		}
 	}
-
-	// DEBUG: print status
-	printf("status ST0=%x ST1=%x\n",SDMMC_READ(sc, AM18XX_SDMMC_MMCST0),SDMMC_READ(sc, AM18XX_SDMMC_MMCST1));
-	// end debug
 
 	/* cleanup */
 cleanup:
@@ -433,7 +456,6 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	delay(10); //TODO: u-boot has this
 
 	/* clocks off */
-	printf("clocks off\n");
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, 0);
 
 	/* disable all interrupts */
@@ -450,27 +472,21 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	am18xx_sdmmc_reg_clearbits(sc, AM18XX_SDMMC_MMCCTL,AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
 
 	/* enable the clock */
-	printf("clocks on\n");
 	am18xx_sdmmc_bus_clock(sc, 400);
 	am18xx_sdmmc_reg_setbits(sc, AM18XX_SDMMC_MMCCLK, AM18XX_SDMMC_MMCCLK_CLKEN);
 
 	/* enable the interrupts we want */
-	printf("enabling interrupts\n");
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, AM18XX_SDMMC_MMCIM_EDATDNE |
-						AM18XX_SDMMC_MMCIM_ERSPDNE |
-						AM18XX_SDMMC_MMCIM_ETOUTRD|
-						AM18XX_SDMMC_MMCIM_ETOUTRS|
-						AM18XX_SDMMC_MMCIM_ECRCWR|
-						AM18XX_SDMMC_MMCIM_ECRCRD|
-						AM18XX_SDMMC_MMCIM_ECRCRS|
-						AM18XX_SDMMC_MMCIM_EDXRDY|
-						AM18XX_SDMMC_MMCIM_EDRRDY|
-						AM18XX_SDMMC_MMCIM_EDATED|
-						AM18XX_SDMMC_MMCIM_ETRNDNE|
-						AM18XX_SDMMC_MMCIM_ECCS
-	    );
-	printf("enabled interrupts\n");
-	printf("MMCCTL=%x\n",SDMMC_READ(sc, AM18XX_SDMMC_MMCCTL));
+					    AM18XX_SDMMC_MMCIM_ERSPDNE |
+					    AM18XX_SDMMC_MMCIM_ETOUTRD |
+					    AM18XX_SDMMC_MMCIM_ETOUTRS |
+					    AM18XX_SDMMC_MMCIM_ECRCWR  |
+					    AM18XX_SDMMC_MMCIM_ECRCRD  |
+					    AM18XX_SDMMC_MMCIM_ECRCRS  |
+					    AM18XX_SDMMC_MMCIM_EDXRDY  |
+					    AM18XX_SDMMC_MMCIM_EDRRDY  |
+					    AM18XX_SDMMC_MMCIM_EDATED  |
+					    AM18XX_SDMMC_MMCIM_ETRNDNE);
 }
 
 static int
@@ -478,17 +494,17 @@ am18xx_sdmmc_intr(void *arg)
 {
 	struct am18xx_sdmmc_softc *sc = arg;
 
-	uint32_t fired_intr = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-	printf("am18xx_sdmmc_intr st0=%x\n", fired_intr);
+	KASSERT(sc->sc_irq_wait);
 
+	sc->sc_fired_irqs = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+
+	/* signal the main thread */
 	mutex_enter(&sc->sc_lock);
-
 	sc->sc_irq_wait = false;
 	cv_signal(&sc->sc_intr_cv);
-
 	mutex_exit(&sc->sc_lock);
 
-	return 1; /* Acknowledge IRQ. */
+	return 1; /* acknowledge IRQ */
 }
 
 int
@@ -517,7 +533,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_HIGH);
 	cv_init(&sc->sc_intr_cv, "sdmmc_intr");
 
-	/* enable clock */
+	/* enable host controller clock */
 	sc->sc_clk = fdtbus_clock_get_index(phandle, 0);
 	if (sc->sc_clk == NULL) {
 		aprint_error(": failed to get sdmmc clk\n");
@@ -554,9 +570,10 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
+	/* reset the controller */
 	am18xx_sdmmc_init(sc);
 
-	/* Attach sdmmc to ssp bus. */
+	/* attach us as an sdmmc device */
 	memset(&saa, 0, sizeof(saa));
 	saa.saa_busname = "sdmmc";
 	saa.saa_sct	= &am18xx_sdmmc_functions;
@@ -564,8 +581,8 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	saa.saa_sch	= sc;
 	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= clk_rate / AM18XX_SDMMC_MAX_CLOCK_DIVIDER;
-	saa.saa_clkmax	= clk_rate / AM18XX_SDMMC_MIN_CLOCK_DIVIDER;
-	// TODO: get NBit_mode cap from device tree
+	saa.saa_clkmax	= clk_rate / AM18XX_SDMMC_MIN_CLOCK_DIVIDER; // TODO: take this from the DT
+	// TODO: get NBit_mode cap from device tree, there are flags for sd highspeed mode in DT and sdmmc code
 	saa.saa_caps	= SMC_CAPS_4BIT_MODE | SMC_CAPS_SINGLE_ONLY;
 	sc->sc_sdmmc = config_found(sc->sc_dev, &saa, NULL, CFARGS_NONE);
 	if (sc->sc_sdmmc == NULL) {

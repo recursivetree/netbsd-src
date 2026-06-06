@@ -44,6 +44,8 @@
 #include <dev/sdmmc/sdmmcreg.h>
 #include <dev/sdmmc/sdmmcvar.h>
 
+#include <arm/ti/ti_edma.h>
+
 #define	SDMMC_READ(sc, reg)					\
 	bus_space_read_4((sc)->sc_bst, (sc)->sc_bsh, reg)
 #define	SDMMC_WRITE(sc, reg, val)				\
@@ -58,12 +60,15 @@
 #define AM18XX_SDMMC_MMCTOD 0x18
 #define AM18XX_SDMMC_MMCBLEN 0x1C
 #define AM18XX_SDMMC_MMCNBLK 0x20
+#define AM18XX_SDMMC_MMCDRR 0x28
+#define AM18XX_SDMMC_MMCDXR 0x2C
 #define AM18XX_SDMMC_MMCCMD 0x30
 #define AM18XX_SDMMC_MMCARGHL 0x34
 #define AM18XX_SDMMC_MMCRSP01 0x38
 #define AM18XX_SDMMC_MMCRSP23 0x3C
 #define AM18XX_SDMMC_MMCRSP45 0x40
 #define AM18XX_SDMMC_MMCRSP67 0x44
+#define AM18XX_SDMMC_FIFOCTL 0x74
 
 #define AM18XX_SDMMC_MMCCTL_DATARST	__BIT(0)
 #define AM18XX_SDMMC_MMCCTL_CMDRST	__BIT(1)
@@ -120,9 +125,14 @@
 #define AM18XX_SDMMC_MMCCMD_RSPFMT_R2		2
 #define AM18XX_SDMMC_MMCCMD_RSPFMT_R3		3
 
+#define AM18XX_SDMMC_FIFOCTL_FIFORST	__BIT(0)
+#define AM18XX_SDMMC_FIFOCTL_FIFODIRW	__BIT(1)
+#define AM18XX_SDMMC_FIFOCTL_FIFOLEV64 	__BIT(2)
+
 #define AM18XX_SDMMC_MAX_CLOCK_DIVIDER (2*(0xFF + 1))
 #define AM18XX_SDMMC_MIN_CLOCK_DIVIDER (2*(0x00 + 1))
 
+//TODO: optimize layout
 struct am18xx_sdmmc_softc {
 	bus_space_tag_t sc_bst;
 	bus_space_handle_t sc_bsh;
@@ -135,6 +145,11 @@ struct am18xx_sdmmc_softc {
 	bool sc_irq_wait;
 	bool sc_opendrain;
 	bool sc_firstcmd;
+	struct edma_channel *sc_rx_chan;
+	struct edma_channel *sc_tx_chan;
+	uint16_t sc_rx_param;
+	uint16_t sc_tx_param;
+	uint32_t sc_phys_base_addr;
 };
 
 static int	am18xx_sdmmc_match(device_t, cfdata_t, void *);
@@ -155,6 +170,7 @@ static void	am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t,
 static void	am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_intr(void *);
+static void	am18xx_sdmmc_dma_callback(void *priv);
 
 static void am18xx_sdmmc_reg_setbits(struct am18xx_sdmmc_softc *, bus_addr_t, uint32_t);
 static void am18xx_sdmmc_reg_clearbits(struct am18xx_sdmmc_softc *, bus_addr_t, uint32_t);
@@ -387,13 +403,64 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	if (cmd->c_data != NULL && cmd->c_datalen > 0) {
 		/* command has data transfer */
 		command |= AM18XX_SDMMC_MMCCMD_WDATX;
+		command |= AM18XX_SDMMC_MMCCMD_DMATRIG;
 	}
 	if(sc->sc_firstcmd) {
 		command |= AM18XX_SDMMC_MMCCMD_INITCK;
 	}
 
+	/* configure FIFO register */
+	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
+		/* read */
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFORST);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64);
+	} else {
+		/* write */
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFODIRW | AM18XX_SDMMC_FIFOCTL_FIFORST);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFODIRW);
+	}
+
 	printf("datalen is %d\n", cmd->c_datalen);
-	KASSERT(cmd->c_datalen == 0);
+	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
+
+	// TODO: initiate dma transfer
+	if(cmd->c_datalen > 0 && cmd->c_data != NULL) {
+		printf("the driver: preparing DMA\n");
+
+		/* transfer needs to be bigger than the FIFO size */
+		KASSERT(cmd->c_datalen >= 64);
+		KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+
+		// TODO: prepare transfer
+		/* Do an A-synchronized transfer */
+		struct edma_param transfer;
+		transfer.ep_opt = EDMA_PARAM_OPT_TCINTEN;
+		transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR; // OK
+		transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;	// OK?
+		transfer.ep_acnt = 64; // one FIFO full is 64 bytes 	// OK
+		transfer.ep_bcnt = cmd->c_datalen / 64;			// OK
+		transfer.ep_ccnt = 1;					// OK
+		transfer.ep_dstbidx = 64;				// OK
+		transfer.ep_dstcidx = 64;				// OK
+		transfer.ep_srcbidx = 0;				// OK?
+		transfer.ep_srccidx = 0;				// OK?
+		transfer.ep_bcntrld = 0;				// OK!
+		transfer.ep_link = 0xFFFF;				// OK
+
+		KASSERT(transfer.ep_acnt <= 65535); // TODO: get rid of this by using ccnt efficently
+		KASSERT(transfer.ep_bcnt <= 65535); // TODO
+		KASSERT(transfer.ep_ccnt <= 65535); // TODO
+
+		if(ISSET(cmd->c_flags, SCF_CMD_READ)) {
+			edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
+			    &transfer);
+			edma_transfer_enable(sc->sc_rx_chan, sc->sc_rx_param);
+		} else {
+			edma_set_param(sc->sc_tx_chan, sc->sc_tx_param,
+			    &transfer);
+			edma_transfer_enable(sc->sc_tx_chan, sc->sc_tx_param);
+		}
+	}
 
 	/* write command arguments */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x1FFF);
@@ -408,6 +475,7 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	}
 
 	/* check if we got an error */
+	// TODO cancel DMA if we get a timeout
 	if (sc->sc_fired_irqs & AM18XX_SDMMC_MMCST0_ERRMASK) {
 		if (sc->sc_fired_irqs & (AM18XX_SDMMC_MMCST0_TOUTRS | AM18XX_SDMMC_MMCST0_TOUTRD)) {
 			cmd->c_error = ETIMEDOUT;
@@ -507,6 +575,13 @@ am18xx_sdmmc_intr(void *arg)
 	return 1; /* acknowledge IRQ */
 }
 
+static void
+am18xx_sdmmc_dma_callback(void *priv)
+{
+	/* todo */
+	printf("dma callback reached!\n");
+}
+
 int
 am18xx_sdmmc_match(device_t parent, cfdata_t cf, void *aux)
 {
@@ -554,6 +629,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 		aprint_error(": couldn't map registers\n");
 		return;
 	}
+	sc->sc_phys_base_addr = addr;
 
 	/* establish interrupt */
 	if (!fdtbus_intr_str(phandle, 0, intrstr, sizeof(intrstr))) {
@@ -564,7 +640,33 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	    am18xx_sdmmc_intr, sc,
 	    device_xname(self));
 	if (ih == NULL) {
-		aprint_error_dev(self, "couldn't install timer interrupt\n");
+		aprint_error(": couldn't install interrupt\n");
+		return;
+	}
+
+	/* rx dma channels */
+	struct fdtbus_dma *rx_dma = fdtbus_dma_get(phandle, "rx", am18xx_sdmmc_dma_callback, sc);
+	if (rx_dma == NULL) {
+		aprint_error(": couldn't get rx dma handle\n");
+		return;
+	}
+	sc->sc_rx_chan = rx_dma->dma_priv; /* escape the fdt_dma system since it's interface doesn't match the edma */
+	sc->sc_rx_param = edma_param_alloc(sc->sc_rx_chan);
+	if (sc->sc_rx_param == 0xffff) {
+		aprint_error(": couldn't get rx dma param entry\n");
+		return;
+	}
+
+	/* tx dma channels */
+	struct fdtbus_dma *tx_dma = fdtbus_dma_get(phandle, "tx", am18xx_sdmmc_dma_callback, sc);
+	if (tx_dma == NULL) {
+		aprint_error(": couldn't get rx dma handle\n");
+		return;
+	}
+	sc->sc_tx_chan = tx_dma->dma_priv; /* escape the fdt_dma system since it's interface doesn't match the edma */
+	sc->sc_tx_param = edma_param_alloc(sc->sc_tx_chan);
+	if (sc->sc_tx_param == 0xffff) {
+		aprint_error(": couldn't get tx dma param entry\n");
 		return;
 	}
 

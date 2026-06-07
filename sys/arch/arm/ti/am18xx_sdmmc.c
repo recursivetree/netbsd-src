@@ -90,6 +90,9 @@
 #define AM18XX_SDMMC_MMCST0_CRCWR	__BIT(5)
 #define AM18XX_SDMMC_MMCST0_CRCRD	__BIT(6)
 #define AM18XX_SDMMC_MMCST0_CRCRS	__BIT(7)
+#define AM18XX_SDMMC_MMCST0_DXRDY	__BIT(9)
+#define AM18XX_SDMMC_MMCST0_DRRDY	__BIT(10)
+#define AM18XX_SDMMC_MMCST0_TRNDNE	__BIT(12)
 
 #define AM18XX_SDMMC_MMCST0_ERRMASK	(AM18XX_SDMMC_MMCST0_TOUTRD | \
 					 AM18XX_SDMMC_MMCST0_TOUTRS | \
@@ -143,6 +146,8 @@ struct am18xx_sdmmc_softc {
 	kcondvar_t sc_intr_cv;
 	uint32_t sc_fired_irqs;
 	bool sc_irq_wait;
+	bool sc_command_done;
+	bool sc_transfer_done;
 	bool sc_opendrain;
 	bool sc_firstcmd;
 	struct edma_channel *sc_rx_chan;
@@ -150,6 +155,7 @@ struct am18xx_sdmmc_softc {
 	uint16_t sc_rx_param;
 	uint16_t sc_tx_param;
 	uint32_t sc_phys_base_addr;
+	struct sdmmc_command *sc_cmd;
 };
 
 static int	am18xx_sdmmc_match(device_t, cfdata_t, void *);
@@ -167,6 +173,9 @@ static int	am18xx_sdmmc_bus_width(sdmmc_chipset_handle_t, int);
 static int	am18xx_sdmmc_bus_rod(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t,
     struct sdmmc_command *);
+static void 	am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
+static void	am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
+static void	am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
 static void	am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_intr(void *);
@@ -280,7 +289,7 @@ am18xx_sdmmc_bus_clock(sdmmc_chipset_handle_t sch, int clock)
 		}
 		resulting_rate = ref_clk / (2 * (rt + 1));
 
-		aprint_normal_dev(sc->sc_dev,
+		device_printf(sc->sc_dev,
 		    "running at %d Hz, want %d Hz, %x\n", resulting_rate,
 		    1000 * clock, rt);
 
@@ -342,28 +351,67 @@ static void
 am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t sch, int irq)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
-	aprint_error_dev(sc->sc_dev, "SDIO interrupts not implemented\n");
+	device_printf(sc->sc_dev, "SDIO interrupts not implemented\n");
 }
 
 static void
 am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t sch)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
-	aprint_error_dev(sc->sc_dev, "SDIO interrupts not implemented\n");
+	device_printf(sc->sc_dev, "SDIO interrupts not implemented\n");
 }
 
 static void
 am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
-	mutex_enter(&sc->sc_lock);
 
-	/* wait for the card to be no longer busy */
+	mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_cmd == NULL);
+
+	/* wait for the card to be ready */
+	int timeout = 1000000;
 	while (SDMMC_READ(sc, AM18XX_SDMMC_MMCST1) & AM18XX_SDMMC_MMCST1_BUSY) {
-		printf("busy_delay\n");
-		delay(10); // TODO: timeout
+		delay(10);
+		if (timeout-- == 0) {
+			device_printf(sc->sc_dev, "mmcst1 timeout\n");
+			cmd->c_error = ETIMEDOUT;
+			goto out;
+		}
 	}
 
+	/* send the command to the controller */
+	sc->sc_cmd = cmd;
+	am18xx_sdmmc_initiate_command(sc, cmd);
+
+	/* wait for a response */
+	while (sc->sc_irq_wait) {
+		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
+	}
+
+	printf("condvar done\n");
+
+	/* read the command response */
+	if (cmd->c_flags & SCF_RSP_PRESENT) {
+		cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
+
+		if (cmd->c_flags & SCF_RSP_136) {
+			cmd->c_resp[1] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP45);
+			cmd->c_resp[2] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP23);
+			cmd->c_resp[3] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP01);
+		}
+	}
+
+	sc->sc_firstcmd = false;
+out:
+	sc->sc_cmd = NULL;
+	mutex_exit(&sc->sc_lock);
+
+	printf("returned from command\n");
+}
+
+static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+{
 	/* write block size settings */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCBLEN, cmd->c_blklen);
 	if (cmd->c_blklen != 0) {
@@ -373,14 +421,8 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCNBLK, 0);
 	}
 
-	/* write command*/
+	/* write command */
 	uint32_t command = __SHIFTIN(cmd->c_opcode, AM18XX_SDMMC_MMCCMD_CMD);
-	if (sc->sc_opendrain) {
-		command |= AM18XX_SDMMC_MMCCMD_PPLEN;
-	}
-	if (ISSET(cmd->c_flags, SCF_RSP_BSY)) {
-		command |= AM18XX_SDMMC_MMCCMD_BSYEXP;
-	}
 	uint32_t command_type;
 	if (!ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
 		/* no response */
@@ -396,10 +438,15 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		command_type = AM18XX_SDMMC_MMCCMD_RSPFMT_R3;
 	}
 	command |= __SHIFTIN(command_type, AM18XX_SDMMC_MMCCMD_RSPFMT);
+	if (sc->sc_opendrain) {
+		command |= AM18XX_SDMMC_MMCCMD_PPLEN;
+	}
+	if (ISSET(cmd->c_flags, SCF_RSP_BSY)) {
+		command |= AM18XX_SDMMC_MMCCMD_BSYEXP;
+	}
 	if (!ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		command |= AM18XX_SDMMC_MMCCMD_DTRW;
 	}
-	// TODO: STRMTP is always zero for now. When does it have to be one? linux doesn't use it, so if everything works in the end, just ignore it
 	if (cmd->c_data != NULL && cmd->c_datalen > 0) {
 		/* command has data transfer */
 		command |= AM18XX_SDMMC_MMCCMD_WDATX;
@@ -421,94 +468,71 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	}
 
 	printf("datalen is %d\n", cmd->c_datalen);
-	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
-
-	// TODO: initiate dma transfer
-	if(cmd->c_datalen > 0 && cmd->c_data != NULL) {
-		printf("the driver: preparing DMA\n");
-
-		/* transfer needs to be bigger than the FIFO size */
-		KASSERT(cmd->c_datalen >= 64);
-		KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
-
-		// TODO: prepare transfer
-		/* Do an A-synchronized transfer */
-		struct edma_param transfer;
-		transfer.ep_opt = EDMA_PARAM_OPT_TCINTEN;
-		transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR; // OK
-		transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;	// OK?
-		transfer.ep_acnt = 64; // one FIFO full is 64 bytes 	// OK
-		transfer.ep_bcnt = cmd->c_datalen / 64;			// OK
-		transfer.ep_ccnt = 1;					// OK
-		transfer.ep_dstbidx = 64;				// OK
-		transfer.ep_dstcidx = 64;				// OK
-		transfer.ep_srcbidx = 0;				// OK?
-		transfer.ep_srccidx = 0;				// OK?
-		transfer.ep_bcntrld = 0;				// OK!
-		transfer.ep_link = 0xFFFF;				// OK
-
-		KASSERT(transfer.ep_acnt <= 65535); // TODO: get rid of this by using ccnt efficently
-		KASSERT(transfer.ep_bcnt <= 65535); // TODO
-		KASSERT(transfer.ep_ccnt <= 65535); // TODO
-
-		if(ISSET(cmd->c_flags, SCF_CMD_READ)) {
-			edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
-			    &transfer);
-			edma_transfer_enable(sc->sc_rx_chan, sc->sc_rx_param);
-		} else {
-			edma_set_param(sc->sc_tx_chan, sc->sc_tx_param,
-			    &transfer);
-			edma_transfer_enable(sc->sc_tx_chan, sc->sc_tx_param);
-		}
+	if (false && cmd->c_data != NULL && cmd->c_datalen >= 64) { // not ready
+		am18xx_sdmmc_initiate_dma_transfer(sc, cmd);
+	} else if (cmd->c_data != NULL) {
+		am18xx_sdmmc_initiate_cpu_transfer(sc, cmd);
 	}
+
+	cmd->c_error = 0;
+	sc->sc_command_done = false;
+	sc->sc_transfer_done = cmd->c_datalen == 0 || cmd->c_data == NULL;
+	cmd->c_buf = cmd->c_data;
+	cmd->c_resid = cmd->c_datalen;
 
 	/* write command arguments */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x1FFF);
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCARGHL, cmd->c_arg);
+
 	/* send the command */
 	sc->sc_irq_wait = true;
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCMD, command);
+}
 
-	/* wait for a response */
-	while (sc->sc_irq_wait) {
-		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
-	}
+static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+{
+	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
+	/* transfer needs to be bigger than the FIFO size */
+	KASSERT(cmd->c_datalen >= 64);
+	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 
-	/* check if we got an error */
-	// TODO cancel DMA if we get a timeout
-	if (sc->sc_fired_irqs & AM18XX_SDMMC_MMCST0_ERRMASK) {
-		if (sc->sc_fired_irqs & (AM18XX_SDMMC_MMCST0_TOUTRS | AM18XX_SDMMC_MMCST0_TOUTRD)) {
-			cmd->c_error = ETIMEDOUT;
-		} else {
-			cmd->c_error = EIO;
-		}
+	printf("the driver: preparing DMA\n");
 
-		printf("got an error: %x\n", sc->sc_fired_irqs);
-		goto cleanup;
-	} else if (sc->sc_fired_irqs & AM18XX_SDMMC_MMCST0_RSPDNE) {
-		/* everything okay */
+	// TODO: prepare transfer
+	/* Do an A-synchronized transfer */
+	struct edma_param transfer;
+	transfer.ep_opt = EDMA_PARAM_OPT_TCINTEN;
+	transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR; // OK
+	transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;	// OK?
+	transfer.ep_acnt = 64; // one FIFO full is 64 bytes 	// OK
+	transfer.ep_bcnt = cmd->c_datalen / 64;			// OK
+	transfer.ep_ccnt = 1;					// OK
+	transfer.ep_dstbidx = 64;				// OK
+	transfer.ep_dstcidx = 64;				// OK
+	transfer.ep_srcbidx = 0;				// OK?
+	transfer.ep_srccidx = 0;				// OK?
+	transfer.ep_bcntrld = 0;				// OK!
+	transfer.ep_link = 0xFFFF;				// OK
+
+	KASSERT(transfer.ep_acnt <= 65535); // TODO: get rid of this by using ccnt efficently
+	KASSERT(transfer.ep_bcnt <= 65535); // TODO
+	KASSERT(transfer.ep_ccnt <= 65535); // TODO
+
+	if(ISSET(cmd->c_flags, SCF_CMD_READ)) {
+		edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
+		    &transfer);
+		edma_transfer_enable(sc->sc_rx_chan, sc->sc_rx_param);
 	} else {
-		/* unexpected interrupt */
-		aprint_error_dev(sc->sc_dev, "unexpected interrupt %x\n", sc->sc_fired_irqs);
-
-		cmd->c_error = EIO;
+		edma_set_param(sc->sc_tx_chan, sc->sc_tx_param,
+		    &transfer);
+		edma_transfer_enable(sc->sc_tx_chan, sc->sc_tx_param);
 	}
+}
 
-	/* no error; read the response */
-	if (cmd->c_flags & SCF_RSP_PRESENT) {
-		cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
-
-		if (cmd->c_flags & SCF_RSP_136) {
-			cmd->c_resp[1] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP45);
-			cmd->c_resp[2] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP23);
-			cmd->c_resp[3] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP01);
-		}
-	}
-
-	/* cleanup */
-cleanup:
-	sc->sc_firstcmd = false;
-	mutex_exit(&sc->sc_lock);
+static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+{
+	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
 }
 
 static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
@@ -535,6 +559,7 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	sc->sc_irq_wait = false;
 	sc->sc_opendrain = true;
 	sc->sc_firstcmd = true;
+	sc->sc_cmd = NULL;
 
 	/* take the controller out of reset */
 	am18xx_sdmmc_reg_clearbits(sc, AM18XX_SDMMC_MMCCTL,AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
@@ -557,20 +582,100 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 					    AM18XX_SDMMC_MMCIM_ETRNDNE);
 }
 
+static uint32_t
+am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
+{
+	/* Disable interrupts during cpu transfer. This allows us to capture
+	 * new interrupts and handle them in this interrupt instead of
+	 * generating a second interrupt. */
+	uint32_t mmcim = SDMMC_READ(sc, AM18XX_SDMMC_MMCIM);
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, 0);
+
+	KASSERT(ISSET(sc->sc_cmd->c_flags, SCF_CMD_READ));
+
+	uint32_t status, fullstatus = 0;
+	do {
+		/* read one FIFOfull of data */
+		for (int i = 0; i < 64 / 4 && sc->sc_cmd->c_resid > 0; i++) {
+			KASSERT((sc->sc_cmd->c_resid & 0x3) == 0);
+
+			*((uint32_t *)sc->sc_cmd->c_buf) = SDMMC_READ(sc, AM18XX_SDMMC_MMCDRR);
+			sc->sc_cmd->c_resid -= 4;
+			sc->sc_cmd->c_buf += 4;
+		}
+		status = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+		fullstatus |= status;
+	} while (status & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY));
+
+	/* read new interrupts (and clear MMCST0 as a side effect) */
+	fullstatus |= SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+	/* re-enable data receive/transmit interrupts*/
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, mmcim);
+	/* and return our new interrupts */
+	return fullstatus;
+}
+
 static int
 am18xx_sdmmc_intr(void *arg)
 {
+	bool complete_by_failing = false;
 	struct am18xx_sdmmc_softc *sc = arg;
 
-	KASSERT(sc->sc_irq_wait);
-
-	sc->sc_fired_irqs = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-
-	/* signal the main thread */
+	/* ensure we have the lock while touching the softcore */
 	mutex_enter(&sc->sc_lock);
-	sc->sc_irq_wait = false;
-	cv_signal(&sc->sc_intr_cv);
+
+	/* get the interrupt cause. there can be multiple causes at once */
+	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+	//printf("irqs %x\n", cause);
+
+	KASSERT(sc->sc_irq_wait); /* ensure this only runs if we expect irqs */
+
+	// TODO: comment explaining ordering
+
+	/* first, transfer any outstanding data since that might generate new
+	 * status flags. MMCST0 flags are cleared when reading, we re-read
+	 * MMCST0 to handle that immediately. */
+	if (cause & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY )) {
+		cause |= am18xx_sdmmc_cpu_data_transfer(sc);
+	}
+
+	if (cause & (AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DATDNE)) { // TODO: linux doesn't use AM18XX_SDMMC_MMCST0_TRNDNE
+		if (sc->sc_cmd->c_resid > 0) {
+			/* transfer remaining outstanding data */
+			cause |= am18xx_sdmmc_cpu_data_transfer(sc);
+		}
+		sc->sc_transfer_done = true;
+	}
+
+	/* check if any operation failed */
+	if (cause & AM18XX_SDMMC_MMCST0_ERRMASK) {
+		if (cause & (AM18XX_SDMMC_MMCST0_TOUTRS | AM18XX_SDMMC_MMCST0_TOUTRD)) {
+			sc->sc_cmd->c_error = ETIMEDOUT;
+		} else {
+			sc->sc_cmd->c_error = EIO;
+		}
+
+		complete_by_failing = true;
+	}
+
+	if (cause & AM18XX_SDMMC_MMCST0_RSPDNE) {
+		sc->sc_command_done = true;
+	}
+
+	if (cause & ~(AM18XX_SDMMC_MMCST0_ERRMASK | AM18XX_SDMMC_MMCST0_RSPDNE | AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY | AM18XX_SDMMC_MMCST0_DATDNE)) {
+		printf("irqs2 %x\n", cause);
+		KASSERT(false); // we don't want any other interrutps
+	}
+
+	if ((sc->sc_command_done && sc->sc_transfer_done) || complete_by_failing) {
+		KASSERT(sc->sc_cmd->c_resid == 0);
+		/* signal the main thread */
+		printf("we're done!\n");
+		sc->sc_irq_wait = false;
+		cv_signal(&sc->sc_intr_cv);
+	}
 	mutex_exit(&sc->sc_lock);
+	printf("irqs2 %x\n", cause);
 
 	return 1; /* acknowledge IRQ */
 }

@@ -135,27 +135,33 @@
 #define AM18XX_SDMMC_MAX_CLOCK_DIVIDER (2*(0xFF + 1))
 #define AM18XX_SDMMC_MIN_CLOCK_DIVIDER (2*(0x00 + 1))
 
-//TODO: optimize layout
 struct am18xx_sdmmc_softc {
+	/* bus_space io */
 	bus_space_tag_t sc_bst;
 	bus_space_handle_t sc_bsh;
-	struct clk *sc_clk;
+
 	device_t sc_dev;
 	device_t sc_sdmmc;
+
+	/* driver internals */
 	kmutex_t sc_lock;
 	kcondvar_t sc_intr_cv;
-	uint32_t sc_fired_irqs;
+	struct sdmmc_command *sc_cmd;
+	struct clk *sc_clk;
+
+	/* edma */
+	uint32_t sc_phys_base_addr;
+	struct edma_channel *sc_rx_chan;
+	struct edma_channel *sc_tx_chan;
+	uint16_t sc_rx_param;
+	uint16_t sc_tx_param;
+
+	/* status flags */
 	bool sc_irq_wait;
 	bool sc_command_done;
 	bool sc_transfer_done;
 	bool sc_opendrain;
 	bool sc_firstcmd;
-	struct edma_channel *sc_rx_chan;
-	struct edma_channel *sc_tx_chan;
-	uint16_t sc_rx_param;
-	uint16_t sc_tx_param;
-	uint32_t sc_phys_base_addr;
-	struct sdmmc_command *sc_cmd;
 };
 
 static int	am18xx_sdmmc_match(device_t, cfdata_t, void *);
@@ -223,21 +229,19 @@ am18xx_sdmmc_host_ocr(sdmmc_chipset_handle_t sch)
 static int
 am18xx_sdmmc_host_maxblklen(sdmmc_chipset_handle_t sch)
 {
-	return 512; /* todo: try if it likes non-power-of-2s like the actual limit 4095 */
+	return 2048;
 }
 
 static int
 am18xx_sdmmc_card_detect(sdmmc_chipset_handle_t sch)
 {
-	printf("am18xx_sdmmc_card_detect\n");
 	return 1; /* todo: change this once we have GPIO */
 }
 
 static int
 am18xx_sdmmc_write_protect(sdmmc_chipset_handle_t sch)
 {
-	printf("am18xx_sdmmc_write_protect\n");
-	return 0; /* todo: actually implement this */
+	return 0; /* todo: change this once we have GPIO */
 }
 
 static int
@@ -252,31 +256,28 @@ am18xx_sdmmc_bus_clock(sdmmc_chipset_handle_t sch, int clock)
 {
 	struct am18xx_sdmmc_softc *sc = sch;
 
-	printf("am18xx_sdmmc_bus_clock %d\n", clock);
-
 	if (clock > 0) {
 		u_int ref_clk = clk_get_rate(sc->sc_clk);
 
-		u_int rt = (ref_clk / (1000 * clock) / 2) - 1;
-		u_int resulting_rate = ref_clk / (2 * (rt + 1));
-		if (resulting_rate > clock * 1000) {
-			rt++;
-		}
-		if (rt > 255) {
-			rt = 255;
-		}
-		if (rt < 0) {
-			rt = 0;
-		}
-		resulting_rate = ref_clk / (2 * (rt + 1));
+		/* calculate divider */
+		u_int divider = (ref_clk / (1000 * clock) / 2) - 1;
 
-		device_printf(sc->sc_dev,
-		    "running at %d Hz, want %d Hz, %x\n", resulting_rate,
-		    1000 * clock, rt);
+		/* round divider */
+		u_int effective_rate = ref_clk / (2 * (divider + 1));
+		if (effective_rate > clock * 1000) {
+			divider++;
+		}
+		if (divider > 255) {
+			divider = 255;
+		}
 
+		device_printf(sc->sc_dev, "requested %d Hz, using %d Hz\n",
+		    1000 * clock, ref_clk / (2 * (divider + 1)));
 
-		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, rt | AM18XX_SDMMC_MMCCLK_CLKEN);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK,
+		    divider | AM18XX_SDMMC_MMCCLK_CLKEN);
 	} else {
+		device_printf(sc->sc_dev, "clock=0Hz");
 		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, 0);
 	}
 
@@ -531,8 +532,7 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST1);
-
-	delay(10); //TODO: u-boot has this
+	delay(10);
 
 	/* clocks off */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCLK, 0);
@@ -540,7 +540,7 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	/* disable all interrupts */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, 0);
 	/* write timeout values to maximum */
-	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x1FFF); // TODO: use different values than linux
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x3FFFF);
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOD, 0xFFFF);
 
 	sc->sc_irq_wait = false;
@@ -767,7 +767,9 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	saa.saa_sch	= sc;
 	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= clk_rate / AM18XX_SDMMC_MAX_CLOCK_DIVIDER;
-	saa.saa_clkmax	= clk_rate / AM18XX_SDMMC_MIN_CLOCK_DIVIDER; // TODO: take this from the DT
+	if(of_getprop_uint32(phandle, "max-frequency", &saa.saa_clkmin)) {
+		saa.saa_clkmax = 25000000; /* 25MHz is always okay*/
+	}
 	saa.saa_caps	= 0;
 
 	if(of_hasprop(phandle, "cap-sd-highspeed")) {

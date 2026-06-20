@@ -644,9 +644,8 @@ am18xx_sdmmc_intr(void *arg)
 		sc->sc_command_done = true;
 	}
 
-	if (cause & ~(AM18XX_SDMMC_MMCST0_ERRMASK | AM18XX_SDMMC_MMCST0_RSPDNE | AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY | AM18XX_SDMMC_MMCST0_DATDNE)) {
-		printf("irqs2-err %x\n", cause);
-		KASSERT(false); // we don't want any other interrutps
+	if (cause & ~(AM18XX_SDMMC_MMCST0_ERRMASK | AM18XX_SDMMC_MMCST0_RSPDNE | AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY | AM18XX_SDMMC_MMCST0_DATDNE | AM18XX_SDMMC_MMCST0_BSYDNE)) {
+		device_printf(sc->sc_dev, "unknown interrupt %x\n", cause);
 	}
 
 	if ((sc->sc_command_done && sc->sc_transfer_done) || complete_by_failing) {
@@ -769,7 +768,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= clk_rate / AM18XX_SDMMC_MAX_CLOCK_DIVIDER;
 	saa.saa_clkmax	= clk_rate / AM18XX_SDMMC_MIN_CLOCK_DIVIDER; // TODO: take this from the DT
-	saa.saa_caps	= SMC_CAPS_SINGLE_ONLY;
+	saa.saa_caps	= 0;
 
 	if(of_hasprop(phandle, "cap-sd-highspeed")) {
 		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED;

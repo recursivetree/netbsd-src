@@ -769,8 +769,31 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= clk_rate / AM18XX_SDMMC_MAX_CLOCK_DIVIDER;
 	saa.saa_clkmax	= clk_rate / AM18XX_SDMMC_MIN_CLOCK_DIVIDER; // TODO: take this from the DT
-	// TODO: get NBit_mode cap from device tree, there are flags for sd highspeed mode in DT and sdmmc code
-	saa.saa_caps	= SMC_CAPS_4BIT_MODE | SMC_CAPS_SINGLE_ONLY;
+	saa.saa_caps	= SMC_CAPS_SINGLE_ONLY;
+
+	if(of_hasprop(phandle, "cap-sd-highspeed")) {
+		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED;
+	}
+	if(of_hasprop(phandle, "cap-mmc-highspeed")) {
+		saa.saa_caps |= SMC_CAPS_MMC_HIGHSPEED;
+	}
+
+	uint32_t bus_width;
+	if(of_getprop_uint32(phandle, "bus-width", &bus_width)) {
+		bus_width = 1;
+	}
+	switch (bus_width) {
+	case 8:
+		saa.saa_caps |= SMC_CAPS_8BIT_MODE;
+		break;
+	case 4:
+		saa.saa_caps |= SMC_CAPS_4BIT_MODE;
+		break;
+	default:
+		/* use 1-bit mode */
+		break;
+	}
+
 	sc->sc_sdmmc = config_found(sc->sc_dev, &saa, NULL, CFARGS_NONE);
 	if (sc->sc_sdmmc == NULL) {
 		aprint_error_dev(sc->sc_dev, "unable to attach sdmmc\n");

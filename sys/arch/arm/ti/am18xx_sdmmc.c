@@ -181,9 +181,6 @@ static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_intr(void *);
 static void	am18xx_sdmmc_dma_callback(void *priv);
 
-static void am18xx_sdmmc_reg_setbits(struct am18xx_sdmmc_softc *, bus_addr_t, uint32_t);
-static void am18xx_sdmmc_reg_clearbits(struct am18xx_sdmmc_softc *, bus_addr_t, uint32_t);
-
 CFATTACH_DECL_NEW(am18xxsdmmc, sizeof(struct am18xx_sdmmc_softc),
     am18xx_sdmmc_match, am18xx_sdmmc_attach, NULL, NULL);
 
@@ -204,22 +201,6 @@ static struct sdmmc_chip_functions am18xx_sdmmc_functions = {
 	.card_enable_intr = am18xx_sdmmc_card_enable_intr,
 	.card_intr_ack	= am18xx_sdmmc_card_intr_ack
 };
-
-static void am18xx_sdmmc_reg_setbits(struct am18xx_sdmmc_softc *sc, bus_addr_t reg, uint32_t mask)
-{
-	uint32_t regval = SDMMC_READ(sc, reg);
-	regval |= mask;
-	SDMMC_WRITE(sc, reg, regval);
-
-}
-
-static void am18xx_sdmmc_reg_clearbits(struct am18xx_sdmmc_softc *sc, bus_addr_t reg, uint32_t mask)
-{
-	uint32_t regval = SDMMC_READ(sc, reg);
-	regval &= ~mask;
-	SDMMC_WRITE(sc, reg, regval);
-
-}
 
 static int
 am18xx_sdmmc_host_reset(sdmmc_chipset_handle_t sch)
@@ -388,11 +369,9 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	while (sc->sc_irq_wait) {
 		int err = cv_timedwait(&sc->sc_intr_cv, &sc->sc_lock, mstohz(1000));
 		if(err == EWOULDBLOCK) {
-			// TODO: smart way to restart
-			printf("cv_timedwait %d\n", err);
-			uint32_t status0 = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-			uint32_t status1 = SDMMC_READ(sc, AM18XX_SDMMC_MMCST1);
-			printf("status st0=%d st1=%x cmd_done=%d transfer_done=%d datalen=%d remaining=%d\n", status0, status1, sc->sc_command_done, sc->sc_transfer_done, cmd->c_datalen, cmd->c_resid);
+			device_printf(sc->sc_dev, "command timeout");
+			cmd->c_error = ETIMEDOUT;
+			goto out;
 		}
 	}
 
@@ -549,12 +528,9 @@ static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc, st
 static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 {
 	/* reset the controller */
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST1);
-	am18xx_sdmmc_reg_setbits(sc, AM18XX_SDMMC_MMCCTL,AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
-
-	/* clear bits we don't need settings */
-	am18xx_sdmmc_reg_clearbits(sc, AM18XX_SDMMC_MMCCTL,AM18XX_SDMMC_MMCCTL_PERMDX | AM18XX_SDMMC_MMCCTL_PERMDR | AM18XX_SDMMC_MMCCTL_DATEG | AM18XX_SDMMC_MMCCTL_WIDTH0 | AM18XX_SDMMC_MMCCTL_WIDTH1);
 
 	delay(10); //TODO: u-boot has this
 
@@ -573,11 +549,10 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	sc->sc_cmd = NULL;
 
 	/* take the controller out of reset */
-	am18xx_sdmmc_reg_clearbits(sc, AM18XX_SDMMC_MMCCTL,AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, 0);
 
 	/* enable the clock */
 	am18xx_sdmmc_bus_clock(sc, 400);
-	am18xx_sdmmc_reg_setbits(sc, AM18XX_SDMMC_MMCCLK, AM18XX_SDMMC_MMCCLK_CLKEN);
 
 	/* enable the interrupts we want */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, AM18XX_SDMMC_MMCIM_EDATDNE |

@@ -392,13 +392,22 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	printf("condvar done\n");
 
 	/* read the command response */
-	if (cmd->c_flags & SCF_RSP_PRESENT) {
-		cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
-
+	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
 		if (cmd->c_flags & SCF_RSP_136) {
-			cmd->c_resp[1] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP45);
-			cmd->c_resp[2] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP23);
-			cmd->c_resp[3] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP01);
+			cmd->c_resp[3] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
+			cmd->c_resp[2] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP45);
+			cmd->c_resp[1] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP23);
+			cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP01);
+
+			cmd->c_resp[0] >>= 8; /* Remove CRC7 + LSB. */
+			cmd->c_resp[0] |= (0x000000FF & cmd->c_resp[1]) << 24;
+			cmd->c_resp[1] >>= 8;
+			cmd->c_resp[1] |= (0x000000FF & cmd->c_resp[2]) << 24;
+			cmd->c_resp[2] >>= 8;
+			cmd->c_resp[2] |= (0x000000FF & cmd->c_resp[3]) << 24;
+			cmd->c_resp[3] >>= 8;
+		} else {
+			cmd->c_resp[0] = SDMMC_READ(sc, AM18XX_SDMMC_MMCRSP67);
 		}
 	}
 

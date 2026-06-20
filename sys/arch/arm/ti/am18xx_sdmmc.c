@@ -51,24 +51,24 @@
 #define	SDMMC_WRITE(sc, reg, val)				\
 	bus_space_write_4((sc)->sc_bst, (sc)->sc_bsh, reg, val)
 
-#define AM18XX_SDMMC_MMCCTL 0x0
-#define AM18XX_SDMMC_MMCCLK 0x4
-#define AM18XX_SDMMC_MMCST0 0x8
-#define AM18XX_SDMMC_MMCST1 0xC
-#define AM18XX_SDMMC_MMCIM  0x10
-#define AM18XX_SDMMC_MMCTOR 0x14
-#define AM18XX_SDMMC_MMCTOD 0x18
-#define AM18XX_SDMMC_MMCBLEN 0x1C
-#define AM18XX_SDMMC_MMCNBLK 0x20
-#define AM18XX_SDMMC_MMCDRR 0x28
-#define AM18XX_SDMMC_MMCDXR 0x2C
-#define AM18XX_SDMMC_MMCCMD 0x30
-#define AM18XX_SDMMC_MMCARGHL 0x34
-#define AM18XX_SDMMC_MMCRSP01 0x38
-#define AM18XX_SDMMC_MMCRSP23 0x3C
-#define AM18XX_SDMMC_MMCRSP45 0x40
-#define AM18XX_SDMMC_MMCRSP67 0x44
-#define AM18XX_SDMMC_FIFOCTL 0x74
+#define AM18XX_SDMMC_MMCCTL	0x0
+#define AM18XX_SDMMC_MMCCLK	0x4
+#define AM18XX_SDMMC_MMCST0	0x8
+#define AM18XX_SDMMC_MMCST1	0xC
+#define AM18XX_SDMMC_MMCIM	0x10
+#define AM18XX_SDMMC_MMCTOR	0x14
+#define AM18XX_SDMMC_MMCTOD	0x18
+#define AM18XX_SDMMC_MMCBLEN	0x1C
+#define AM18XX_SDMMC_MMCNBLK	0x20
+#define AM18XX_SDMMC_MMCDRR	0x28
+#define AM18XX_SDMMC_MMCDXR	0x2C
+#define AM18XX_SDMMC_MMCCMD	0x30
+#define AM18XX_SDMMC_MMCARGHL	0x34
+#define AM18XX_SDMMC_MMCRSP01	0x38
+#define AM18XX_SDMMC_MMCRSP23	0x3C
+#define AM18XX_SDMMC_MMCRSP45	0x40
+#define AM18XX_SDMMC_MMCRSP67	0x44
+#define AM18XX_SDMMC_FIFOCTL	0x74
 
 #define AM18XX_SDMMC_MMCCTL_DATARST	__BIT(0)
 #define AM18XX_SDMMC_MMCCTL_CMDRST	__BIT(1)
@@ -96,8 +96,8 @@
 
 #define AM18XX_SDMMC_MMCST0_ERRMASK	(AM18XX_SDMMC_MMCST0_TOUTRD | \
 					 AM18XX_SDMMC_MMCST0_TOUTRS | \
-					 AM18XX_SDMMC_MMCST0_CRCWR |  \
-					 AM18XX_SDMMC_MMCST0_CRCRD |  \
+					 AM18XX_SDMMC_MMCST0_CRCWR  | \
+					 AM18XX_SDMMC_MMCST0_CRCRD  | \
 					 AM18XX_SDMMC_MMCST0_CRCRS)
 
 #define AM18XX_SDMMC_MMCST1_BUSY	__BIT(0)
@@ -132,8 +132,8 @@
 #define AM18XX_SDMMC_FIFOCTL_FIFODIRW	__BIT(1)
 #define AM18XX_SDMMC_FIFOCTL_FIFOLEV64 	__BIT(2)
 
-#define AM18XX_SDMMC_MAX_CLOCK_DIVIDER (2*(0xFF + 1))
-#define AM18XX_SDMMC_MIN_CLOCK_DIVIDER (2*(0x00 + 1))
+#define AM18XX_SDMMC_MAX_CLOCK_DIVIDER (2 * (0xFF + 1))
+#define AM18XX_SDMMC_MIN_CLOCK_DIVIDER (2 * (0x00 + 1))
 
 struct am18xx_sdmmc_softc {
 	/* bus_space io */
@@ -167,7 +167,6 @@ struct am18xx_sdmmc_softc {
 static int	am18xx_sdmmc_match(device_t, cfdata_t, void *);
 static void	am18xx_sdmmc_attach(device_t, device_t, void *);
 static void	am18xx_sdmmc_init(struct am18xx_sdmmc_softc *);
-
 static int	am18xx_sdmmc_host_reset(sdmmc_chipset_handle_t);
 static uint32_t	am18xx_sdmmc_host_ocr(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_host_maxblklen(sdmmc_chipset_handle_t);
@@ -179,9 +178,12 @@ static int	am18xx_sdmmc_bus_width(sdmmc_chipset_handle_t, int);
 static int	am18xx_sdmmc_bus_rod(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t,
     struct sdmmc_command *);
-static void 	am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
-static void	am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
-static void	am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *, struct sdmmc_command *);
+static void 	am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *,
+    struct sdmmc_command *);
+static void	am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *,
+    struct sdmmc_command *);
+static void	am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *,
+    struct sdmmc_command *);
 static void	am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_intr(void *);
@@ -307,7 +309,8 @@ am18xx_sdmmc_bus_width(sdmmc_chipset_handle_t sch, int width)
 
 	/* change bus bit width bits in MMCCTL */
 	uint32_t regval = SDMMC_READ(sc, AM18XX_SDMMC_MMCCTL);
-	regval = (regval & (~(AM18XX_SDMMC_MMCCTL_WIDTH0 | AM18XX_SDMMC_MMCCTL_WIDTH1))) | val;
+	regval = val | (regval &
+		 (~(AM18XX_SDMMC_MMCCTL_WIDTH0 | AM18XX_SDMMC_MMCCTL_WIDTH1)));
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, regval);
 
 	return 0;
@@ -367,9 +370,10 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	am18xx_sdmmc_initiate_command(sc, cmd);
 
 	/* wait for a response */
+	int err;
 	while (sc->sc_irq_wait) {
-		int err = cv_timedwait(&sc->sc_intr_cv, &sc->sc_lock, mstohz(1000));
-		if(err == EWOULDBLOCK) {
+		err = cv_timedwait(&sc->sc_intr_cv, &sc->sc_lock, mstohz(1000));
+		if (err == EWOULDBLOCK) {
 			device_printf(sc->sc_dev, "command timeout");
 			cmd->c_error = ETIMEDOUT;
 			goto out;
@@ -402,7 +406,8 @@ out:
 	mutex_exit(&sc->sc_lock);
 }
 
-static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
+    struct sdmmc_command *cmd)
 {
 	/* write block size settings */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCBLEN, cmd->c_blklen);
@@ -444,19 +449,27 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct 
 		command |= AM18XX_SDMMC_MMCCMD_WDATX;
 		command |= AM18XX_SDMMC_MMCCMD_DMATRIG;
 	}
-	if(sc->sc_firstcmd) {
+	if (sc->sc_firstcmd) {
 		command |= AM18XX_SDMMC_MMCCMD_INITCK;
 	}
 
 	/* configure FIFO register */
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		/* read */
-		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFORST);
-		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL,
+			AM18XX_SDMMC_FIFOCTL_FIFOLEV64 |
+			AM18XX_SDMMC_FIFOCTL_FIFORST);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL,
+			AM18XX_SDMMC_FIFOCTL_FIFOLEV64);
 	} else {
 		/* write */
-		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFODIRW | AM18XX_SDMMC_FIFOCTL_FIFORST);
-		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFODIRW);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL,
+			AM18XX_SDMMC_FIFOCTL_FIFOLEV64 |
+			AM18XX_SDMMC_FIFOCTL_FIFODIRW |
+			AM18XX_SDMMC_FIFOCTL_FIFORST);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL,
+			AM18XX_SDMMC_FIFOCTL_FIFOLEV64 |
+			AM18XX_SDMMC_FIFOCTL_FIFODIRW);
 	}
 
 	if (false && cmd->c_data != NULL && cmd->c_datalen >= 64) { // not ready
@@ -480,7 +493,8 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct 
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCMD, command);
 }
 
-static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
+    struct sdmmc_command *cmd)
 {
 	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
 	/* transfer needs to be bigger than the FIFO size */
@@ -509,7 +523,7 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc, st
 	KASSERT(transfer.ep_bcnt <= 65535); // TODO
 	KASSERT(transfer.ep_ccnt <= 65535); // TODO
 
-	if(ISSET(cmd->c_flags, SCF_CMD_READ)) {
+	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
 		    &transfer);
 		edma_transfer_enable(sc->sc_rx_chan, sc->sc_rx_param);
@@ -520,7 +534,8 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc, st
 	}
 }
 
-static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
+static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc,
+    struct sdmmc_command *cmd)
 {
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
@@ -529,7 +544,8 @@ static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc, st
 static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 {
 	/* reset the controller */
-	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, AM18XX_SDMMC_MMCCTL_DATARST | AM18XX_SDMMC_MMCCTL_CMDRST);
+	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCCTL, AM18XX_SDMMC_MMCCTL_DATARST
+					   | AM18XX_SDMMC_MMCCTL_CMDRST);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 	SDMMC_READ(sc, AM18XX_SDMMC_MMCST1);
 	delay(10);
@@ -584,13 +600,15 @@ am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
 		for (int i = 0; i < (64 / 4) && sc->sc_cmd->c_resid > 0; i++) {
 			KASSERT((sc->sc_cmd->c_resid & 0x3) == 0);
 
-			*((uint32_t *)sc->sc_cmd->c_buf) = SDMMC_READ(sc, AM18XX_SDMMC_MMCDRR);
+			*((uint32_t *)sc->sc_cmd->c_buf) =
+			    SDMMC_READ(sc, AM18XX_SDMMC_MMCDRR);
 			sc->sc_cmd->c_resid -= 4;
 			sc->sc_cmd->c_buf += 4;
 		}
 		status = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 		fullstatus |= status;
-	} while (status & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY));
+	} while (status & (AM18XX_SDMMC_MMCST0_DRRDY
+			 | AM18XX_SDMMC_MMCST0_DXRDY));
 
 	/* re-enable data receive/transmit interrupts*/
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, mmcim);
@@ -601,26 +619,35 @@ am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
 static int
 am18xx_sdmmc_intr(void *arg)
 {
-	bool complete_by_failing = false;
+	bool cmd_failed = false;
 	struct am18xx_sdmmc_softc *sc = arg;
 
 	/* ensure we have the lock while touching the softcore */
 	mutex_enter(&sc->sc_lock);
 
-	/* get the interrupt cause. there can be multiple causes at once */
+	/* ensure this only runs if we expect irqs */
+	KASSERT(sc->sc_irq_wait);
+
+	/* Read the interrupt cause; handle it. The order in which we deal with
+	 * different interrupt reasons matters a great deal. */
 	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 
-	KASSERT(sc->sc_irq_wait); /* ensure this only runs if we expect irqs */
-
-	// TODO: comment explaining ordering
-
-	/* first, transfer any outstanding data since that might generate new
-	 * status flags. MMCST0 flags are cleared when reading, we re-read
-	 * MMCST0 to handle that immediately. */
+	/* 1. Service the FIFO until it is empty/full (depending on if we are
+	 * reading or writing). We can complete multiple FIFO loads in one
+	 * interrupts if the FIFO clears fast enough. After servicing the
+	 * FIFO, am18xx_sdmmc_cpu_data_transfer checks for new interrupt
+	 * requests like CRC errors or command completion events so we can
+	 * deal with them without generating a second interrupt. We service
+	 * the FIFO first so we can deal with these new events later on. */
 	if (cause & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY )) {
 		cause |= am18xx_sdmmc_cpu_data_transfer(sc);
 	}
 
+	/* 2. DATDNE indicates the data transfer is complete. If the data size
+	 * is not a multiple of the FIFO, we don't get a DXRDY|DRRDY irq,
+	 * but the data will be ready to transfer.
+	 * This step is the second because the FIFO transfer might still
+	 * generate events like CRC errors. */
 	if (cause & AM18XX_SDMMC_MMCST0_DATDNE) {
 		if (sc->sc_cmd->c_resid > 0) {
 			/* transfer remaining outstanding data */
@@ -629,33 +656,32 @@ am18xx_sdmmc_intr(void *arg)
 		sc->sc_transfer_done = true;
 	}
 
-	/* check if any operation failed */
+	/* 3. Check if any operation failed (CRC errors, timeouts). By now, all
+	 * FIFO transfers that could generate new events have happened. */
 	if (cause & AM18XX_SDMMC_MMCST0_ERRMASK) {
-		if (cause & (AM18XX_SDMMC_MMCST0_TOUTRS | AM18XX_SDMMC_MMCST0_TOUTRD)) {
+		if (cause & (AM18XX_SDMMC_MMCST0_TOUTRS
+			   | AM18XX_SDMMC_MMCST0_TOUTRD)) {
 			sc->sc_cmd->c_error = ETIMEDOUT;
 		} else {
 			sc->sc_cmd->c_error = EIO;
 		}
 
-		complete_by_failing = true;
+		cmd_failed = true;
 	}
 
+	/* 4. Check if the command has been fully transmitted. */
 	if (cause & AM18XX_SDMMC_MMCST0_RSPDNE) {
 		sc->sc_command_done = true;
 	}
 
-	if (cause & ~(AM18XX_SDMMC_MMCST0_ERRMASK | AM18XX_SDMMC_MMCST0_RSPDNE | AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY | AM18XX_SDMMC_MMCST0_DATDNE | AM18XX_SDMMC_MMCST0_BSYDNE)) {
-		device_printf(sc->sc_dev, "unknown interrupt %x\n", cause);
-	}
-
-	if ((sc->sc_command_done && sc->sc_transfer_done) || complete_by_failing) {
+	/* signal the main thread if we are done */
+	if ((sc->sc_command_done && sc->sc_transfer_done) || cmd_failed) {
 		KASSERT(sc->sc_cmd->c_resid == 0);
-		/* signal the main thread */
 		sc->sc_irq_wait = false;
 		cv_signal(&sc->sc_intr_cv);
 	}
-	mutex_exit(&sc->sc_lock);
 
+	mutex_exit(&sc->sc_lock);
 	return 1; /* acknowledge IRQ */
 }
 
@@ -721,20 +747,21 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_SDMMC, IST_LEVEL,
-	    am18xx_sdmmc_intr, sc,
-	    device_xname(self));
+	    am18xx_sdmmc_intr, sc, device_xname(self));
 	if (ih == NULL) {
 		aprint_error(": couldn't install interrupt\n");
 		return;
 	}
 
 	/* rx dma channels */
-	struct fdtbus_dma *rx_dma = fdtbus_dma_get(phandle, "rx", am18xx_sdmmc_dma_callback, sc);
+	struct fdtbus_dma *rx_dma = fdtbus_dma_get(phandle, "rx",
+	    am18xx_sdmmc_dma_callback, sc);
 	if (rx_dma == NULL) {
 		aprint_error(": couldn't get rx dma handle\n");
 		return;
 	}
-	sc->sc_rx_chan = rx_dma->dma_priv; /* escape the fdt_dma system since it's interface doesn't match the edma */
+	/* escape fdt_dma because it's interface doesn't match the edma */
+	sc->sc_rx_chan = rx_dma->dma_priv;
 	sc->sc_rx_param = edma_param_alloc(sc->sc_rx_chan);
 	if (sc->sc_rx_param == 0xffff) {
 		aprint_error(": couldn't get rx dma param entry\n");
@@ -742,12 +769,14 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* tx dma channels */
-	struct fdtbus_dma *tx_dma = fdtbus_dma_get(phandle, "tx", am18xx_sdmmc_dma_callback, sc);
+	struct fdtbus_dma *tx_dma = fdtbus_dma_get(phandle, "tx",
+	    am18xx_sdmmc_dma_callback, sc);
 	if (tx_dma == NULL) {
 		aprint_error(": couldn't get rx dma handle\n");
 		return;
 	}
-	sc->sc_tx_chan = tx_dma->dma_priv; /* escape the fdt_dma system since it's interface doesn't match the edma */
+	/* escape fdt_dma because it's interface doesn't match the edma */
+	sc->sc_tx_chan = tx_dma->dma_priv;
 	sc->sc_tx_param = edma_param_alloc(sc->sc_tx_chan);
 	if (sc->sc_tx_param == 0xffff) {
 		aprint_error(": couldn't get tx dma param entry\n");
@@ -767,20 +796,20 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	saa.saa_sch	= sc;
 	saa.saa_dmat	= faa->faa_dmat;
 	saa.saa_clkmin	= clk_rate / AM18XX_SDMMC_MAX_CLOCK_DIVIDER;
-	if(of_getprop_uint32(phandle, "max-frequency", &saa.saa_clkmin)) {
+	if (of_getprop_uint32(phandle, "max-frequency", &saa.saa_clkmin)) {
 		saa.saa_clkmax = 25000000; /* 25MHz is always okay*/
 	}
 	saa.saa_caps	= 0;
 
-	if(of_hasprop(phandle, "cap-sd-highspeed")) {
+	if (of_hasprop(phandle, "cap-sd-highspeed")) {
 		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED;
 	}
-	if(of_hasprop(phandle, "cap-mmc-highspeed")) {
+	if (of_hasprop(phandle, "cap-mmc-highspeed")) {
 		saa.saa_caps |= SMC_CAPS_MMC_HIGHSPEED;
 	}
 
 	uint32_t bus_width;
-	if(of_getprop_uint32(phandle, "bus-width", &bus_width)) {
+	if (of_getprop_uint32(phandle, "bus-width", &bus_width)) {
 		bus_width = 1;
 	}
 	switch (bus_width) {

@@ -386,10 +386,15 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 
 	/* wait for a response */
 	while (sc->sc_irq_wait) {
-		cv_wait(&sc->sc_intr_cv, &sc->sc_lock);
+		int err = cv_timedwait(&sc->sc_intr_cv, &sc->sc_lock, mstohz(1000));
+		if(err == EWOULDBLOCK) {
+			// TODO: smart way to restart
+			printf("cv_timedwait %d\n", err);
+			uint32_t status0 = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+			uint32_t status1 = SDMMC_READ(sc, AM18XX_SDMMC_MMCST1);
+			printf("status st0=%d st1=%x cmd_done=%d transfer_done=%d datalen=%d remaining=%d\n", status0, status1, sc->sc_command_done, sc->sc_transfer_done, cmd->c_datalen, cmd->c_resid);
+		}
 	}
-
-	printf("condvar done\n");
 
 	/* read the command response */
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
@@ -415,8 +420,6 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 out:
 	sc->sc_cmd = NULL;
 	mutex_exit(&sc->sc_lock);
-
-	printf("returned from command\n");
 }
 
 static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct sdmmc_command *cmd)
@@ -476,7 +479,6 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc, struct 
 		SDMMC_WRITE(sc, AM18XX_SDMMC_FIFOCTL, AM18XX_SDMMC_FIFOCTL_FIFOLEV64 | AM18XX_SDMMC_FIFOCTL_FIFODIRW);
 	}
 
-	printf("datalen is %d\n", cmd->c_datalen);
 	if (false && cmd->c_data != NULL && cmd->c_datalen >= 64) { // not ready
 		am18xx_sdmmc_initiate_dma_transfer(sc, cmd);
 	} else if (cmd->c_data != NULL) {
@@ -587,8 +589,7 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 					    AM18XX_SDMMC_MMCIM_ECRCRS  |
 					    AM18XX_SDMMC_MMCIM_EDXRDY  |
 					    AM18XX_SDMMC_MMCIM_EDRRDY  |
-					    AM18XX_SDMMC_MMCIM_EDATED  |
-					    AM18XX_SDMMC_MMCIM_ETRNDNE);
+					    AM18XX_SDMMC_MMCIM_EDATED);
 }
 
 static uint32_t
@@ -605,7 +606,7 @@ am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
 	uint32_t status, fullstatus = 0;
 	do {
 		/* read one FIFOfull of data */
-		for (int i = 0; i < 64 / 4 && sc->sc_cmd->c_resid > 0; i++) {
+		for (int i = 0; i < (64 / 4) && sc->sc_cmd->c_resid > 0; i++) {
 			KASSERT((sc->sc_cmd->c_resid & 0x3) == 0);
 
 			*((uint32_t *)sc->sc_cmd->c_buf) = SDMMC_READ(sc, AM18XX_SDMMC_MMCDRR);
@@ -616,8 +617,6 @@ am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
 		fullstatus |= status;
 	} while (status & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY));
 
-	/* read new interrupts (and clear MMCST0 as a side effect) */
-	fullstatus |= SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 	/* re-enable data receive/transmit interrupts*/
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, mmcim);
 	/* and return our new interrupts */
@@ -635,7 +634,6 @@ am18xx_sdmmc_intr(void *arg)
 
 	/* get the interrupt cause. there can be multiple causes at once */
 	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-	//printf("irqs %x\n", cause);
 
 	KASSERT(sc->sc_irq_wait); /* ensure this only runs if we expect irqs */
 
@@ -648,7 +646,7 @@ am18xx_sdmmc_intr(void *arg)
 		cause |= am18xx_sdmmc_cpu_data_transfer(sc);
 	}
 
-	if (cause & (AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DATDNE)) { // TODO: linux doesn't use AM18XX_SDMMC_MMCST0_TRNDNE
+	if (cause & AM18XX_SDMMC_MMCST0_DATDNE) {
 		if (sc->sc_cmd->c_resid > 0) {
 			/* transfer remaining outstanding data */
 			cause |= am18xx_sdmmc_cpu_data_transfer(sc);
@@ -672,19 +670,17 @@ am18xx_sdmmc_intr(void *arg)
 	}
 
 	if (cause & ~(AM18XX_SDMMC_MMCST0_ERRMASK | AM18XX_SDMMC_MMCST0_RSPDNE | AM18XX_SDMMC_MMCST0_TRNDNE | AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY | AM18XX_SDMMC_MMCST0_DATDNE)) {
-		printf("irqs2 %x\n", cause);
+		printf("irqs2-err %x\n", cause);
 		KASSERT(false); // we don't want any other interrutps
 	}
 
 	if ((sc->sc_command_done && sc->sc_transfer_done) || complete_by_failing) {
 		KASSERT(sc->sc_cmd->c_resid == 0);
 		/* signal the main thread */
-		printf("we're done!\n");
 		sc->sc_irq_wait = false;
 		cv_signal(&sc->sc_intr_cv);
 	}
 	mutex_exit(&sc->sc_lock);
-	printf("irqs2 %x\n", cause);
 
 	return 1; /* acknowledge IRQ */
 }

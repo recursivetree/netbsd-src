@@ -353,6 +353,7 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 
 	mutex_enter(&sc->sc_lock);
 	KASSERT(sc->sc_cmd == NULL);
+	sc->sc_cmd = cmd;
 
 	/* wait for the card to be ready */
 	int timeout = 1000000;
@@ -366,7 +367,6 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	}
 
 	/* send the command to the controller */
-	sc->sc_cmd = cmd;
 	am18xx_sdmmc_initiate_command(sc, cmd);
 
 	/* wait for a response */
@@ -472,7 +472,7 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 			AM18XX_SDMMC_FIFOCTL_FIFODIRW);
 	}
 
-	if (false && cmd->c_data != NULL && cmd->c_datalen >= 64) { // not ready
+	if (cmd->c_data != NULL && cmd->c_datalen >= 64) {
 		am18xx_sdmmc_initiate_dma_transfer(sc, cmd);
 	} else if (cmd->c_data != NULL) {
 		am18xx_sdmmc_initiate_cpu_transfer(sc, cmd);
@@ -496,32 +496,42 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
     struct sdmmc_command *cmd)
 {
+	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
+
 	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
 	/* transfer needs to be bigger than the FIFO size */
 	KASSERT(cmd->c_datalen >= 64);
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 
-	printf("the driver: preparing DMA\n");
+	printf("the driver: preparing DMA %d\n", cmd->c_datalen / 64);
 
-	// TODO: prepare transfer
+	struct edma_channel *channel;
+	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
+		channel = sc->sc_rx_chan;
+	} else {
+		channel = sc->sc_tx_chan;
+	}
+
+	// TODO: range checks
+	KASSERT(cmd->c_datalen / 64 <= 65535);
+	KASSERT(cmd->c_dmaseg == 1);
+	KASSERT(cmd->c_dmamap->dm_nsegs == 1);
+
 	/* Do an A-synchronized transfer */
 	struct edma_param transfer;
-	transfer.ep_opt = EDMA_PARAM_OPT_TCINTEN;
+	transfer.ep_opt = __SHIFTIN(edma_channel_index(channel), EDMA_PARAM_OPT_TCC) | EDMA_PARAM_OPT_TCINTEN;
 	transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR; // OK
 	transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;	// OK?
 	transfer.ep_acnt = 64; // one FIFO full is 64 bytes 	// OK
 	transfer.ep_bcnt = cmd->c_datalen / 64;			// OK
 	transfer.ep_ccnt = 1;					// OK
 	transfer.ep_dstbidx = 64;				// OK
-	transfer.ep_dstcidx = 64;				// OK
+	transfer.ep_dstcidx = 0;				// OK
 	transfer.ep_srcbidx = 0;				// OK?
 	transfer.ep_srccidx = 0;				// OK?
 	transfer.ep_bcntrld = 0;				// OK!
 	transfer.ep_link = 0xFFFF;				// OK
-
-	KASSERT(transfer.ep_acnt <= 65535); // TODO: get rid of this by using ccnt efficently
-	KASSERT(transfer.ep_bcnt <= 65535); // TODO
-	KASSERT(transfer.ep_ccnt <= 65535); // TODO
 
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
@@ -799,7 +809,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	if (of_getprop_uint32(phandle, "max-frequency", &saa.saa_clkmin)) {
 		saa.saa_clkmax = 25000000; /* 25MHz is always okay*/
 	}
-	saa.saa_caps	= 0;
+	saa.saa_caps = SMC_CAPS_DMA;
 
 	if (of_hasprop(phandle, "cap-sd-highspeed")) {
 		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED;

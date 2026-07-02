@@ -42,8 +42,8 @@ __KERNEL_RCSID(0, "$NetBSD: ti_edma.c,v 1.5 2022/05/21 19:07:23 andvar Exp $");
 #include <arm/ti/ti_prcm.h>
 #include <arm/ti/ti_edma.h>
 
-#define NUM_DMA_CHANNELS	64
-#define NUM_PARAM_SETS		256
+#define MAX_DMA_CHANNELS	64
+#define MAX_PARAM_SETS		256
 #define MAX_PARAM_PER_CHANNEL	32
 
 #ifdef EDMA_DEBUG
@@ -69,12 +69,17 @@ struct edma_softc {
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_ioh;
 	kmutex_t sc_lock;
-	struct edma_channel sc_dma[NUM_DMA_CHANNELS];
+	struct edma_channel sc_dma[MAX_DMA_CHANNELS];
 
 	void *sc_ih;
 
-	uint32_t sc_dmamask[NUM_DMA_CHANNELS / 32];
-	uint32_t sc_parammask[NUM_PARAM_SETS / 32];
+	uint32_t sc_dmamask[MAX_DMA_CHANNELS / 32];
+	uint32_t sc_parammask[MAX_PARAM_SETS / 32];
+
+	/* CCCFG settings  */
+	uint32_t sc_num_channels;
+	uint32_t sc_num_params;
+	bool sc_has_chmap;
 };
 
 static int edma_match(device_t, cfdata_t, void *);
@@ -153,7 +158,7 @@ edma_attach(device_t parent, device_t self, void *aux)
 	aprint_naive("\n");
 	aprint_normal(": EDMA Channel Controller\n");
 
-	for (idx = 0; idx < NUM_DMA_CHANNELS; idx++) {
+	for (idx = 0; idx < MAX_DMA_CHANNELS; idx++) {
 		struct edma_channel *ch = &sc->sc_dma[idx];
 		ch->ch_sc = sc;
 		ch->ch_type = EDMA_TYPE_DMA;
@@ -197,28 +202,33 @@ static void
 edma_init(struct edma_softc *sc)
 {
 	struct edma_param param;
-	uint32_t val;
+	uint32_t cccfg_val;
 	int idx;
 
-	val = EDMA_READ(sc, EDMA_CCCFG_REG);
-	if (val & EDMA_CCCFG_CHMAP_EXIST) {
-		for (idx = 0; idx < NUM_DMA_CHANNELS; idx++) {
+	cccfg_val = EDMA_READ(sc, EDMA_CCCFG_REG);
+
+	sc->sc_has_chmap = cccfg_val & EDMA_CCCFG_CHMAP_EXIST ? true : false;
+	sc->sc_num_channels = 2 << __SHIFTOUT(cccfg_val, EDMA_CCCFG_NUM_DMACH);
+	sc->sc_num_params = 16 << __SHIFTOUT(cccfg_val, EDMA_CCCFG_NUM_PAENTRY);
+	KASSERT(sc->sc_num_channels < MAX_DMA_CHANNELS);
+	KASSERT(sc->sc_num_params < MAX_PARAM_SETS);
+
+	if (sc->sc_has_chmap) {
+		for (idx = 0; idx < sc->sc_num_channels; idx++) {
 			EDMA_WRITE(sc, EDMA_DCHMAP_REG(idx),
 			    __SHIFTIN(0, EDMA_DCHMAP_PAENTRY));
 		}
 	}
 
+	/* fill the PaRAM with dummies */
 	memset(&param, 0, sizeof(param));
 	param.ep_bcnt = 1;
-	for (idx = 0; idx < NUM_PARAM_SETS; idx++) {
+	for (idx = 0; idx < sc->sc_num_params; idx++) {
 		edma_write_param(sc, idx, &param);
 	}
 
 	/* reserve PaRAM entry 0 for dummy slot */
 	edma_bit_set(sc->sc_parammask, 0);
-	for (idx = 1; idx <= 32; idx++) {
-		edma_bit_set(sc->sc_parammask, idx);
-	}
 }
 
 /*
@@ -342,7 +352,7 @@ edma_channel_alloc_internal(struct edma_softc *sc, enum edma_type type,
 {
 	struct edma_channel *ch = NULL;
 
-	KASSERT(drq < __arraycount(sc->sc_dma));
+	KASSERT(drq < sc->sc_num_channels);
 	KASSERT(type == EDMA_TYPE_DMA);	/* QDMA not implemented */
 	KASSERT(cb != NULL);
 	KASSERT(cbarg != NULL);
@@ -406,7 +416,7 @@ edma_channel_free(struct edma_channel *ch)
  * are no entries available, 0xffff is returned.
  */
 uint16_t
-edma_param_alloc(struct edma_channel *ch)
+edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
 {
 	struct edma_softc *sc = ch->ch_sc;
 	uint16_t param_entry = 0xffff;
@@ -416,13 +426,26 @@ edma_param_alloc(struct edma_channel *ch)
 		return param_entry;
 
 	mutex_enter(&sc->sc_lock);
-	for (idx = 0; idx < NUM_PARAM_SETS; idx++) {
-		if (!edma_bit_isset(sc->sc_parammask, idx)) {
-			param_entry = idx;
-			edma_bit_set(sc->sc_parammask, idx);
-			ch->ch_nparams++;
-			break;
+
+	/* without channel map, some params need to be in a specific place */
+	if (!sc->sc_has_chmap && usage == EDMA_PARAM_TRIGGER) {
+		param_entry = ch->ch_index;
+		if (edma_bit_isset(sc->sc_parammask,  param_entry)) {
+			return 0xffff;
 		}
+	} else {
+		/* we can allocate any PaRAM */
+		//TODO: figure out why the first 32 channels aren't used
+		for (idx = 32; idx < sc->sc_num_params; idx++) {
+			if (!edma_bit_isset(sc->sc_parammask, idx)) {
+				param_entry = idx;
+				break;
+			}
+		}
+	}
+	if (param_entry != 0xffff) {
+		edma_bit_set(sc->sc_parammask, param_entry);
+		ch->ch_nparams++;
 	}
 	mutex_exit(&sc->sc_lock);
 
@@ -437,7 +460,7 @@ edma_param_free(struct edma_channel *ch, uint16_t param_entry)
 {
 	struct edma_softc *sc = ch->ch_sc;
 
-	KASSERT(param_entry < NUM_PARAM_SETS);
+	KASSERT(param_entry < sc->sc_num_params);
 	KASSERT(ch->ch_nparams > 0);
 	KASSERT(edma_bit_isset(sc->sc_parammask, param_entry));
 
@@ -456,7 +479,7 @@ edma_set_param(struct edma_channel *ch, uint16_t param_entry,
 {
 	struct edma_softc *sc = ch->ch_sc;
 
-	KASSERT(param_entry < NUM_PARAM_SETS);
+	KASSERT(param_entry < sc->sc_num_params);
 	KASSERT(ch->ch_nparams > 0);
 	KASSERT(edma_bit_isset(sc->sc_parammask, param_entry));
 
@@ -480,8 +503,10 @@ edma_transfer_enable(struct edma_channel *ch, uint16_t param_entry)
 
 	DPRINTF(1, (sc->sc_dev, "enable transfer ch# %d off %d bit %x pe %d\n", ch->ch_index, (int)off, bit, param_entry));
 
-	EDMA_WRITE(sc, EDMA_DCHMAP_REG(ch->ch_index),
-	    __SHIFTIN(param_entry, EDMA_DCHMAP_PAENTRY));
+	if (sc->sc_has_chmap) {
+		EDMA_WRITE(sc, EDMA_DCHMAP_REG(ch->ch_index),
+		    __SHIFTIN(param_entry, EDMA_DCHMAP_PAENTRY));
+	}
 
 	uint32_t ccerr = EDMA_READ(sc, EDMA_CCERR_REG);
 	if (ccerr) {
@@ -527,8 +552,11 @@ edma_halt(struct edma_channel *ch)
 	EDMA_WRITE(sc, EDMA_SECR_REG + off, bit);
 	EDMA_WRITE(sc, EDMA_EMCR_REG + off, bit);
 
-	EDMA_WRITE(sc, EDMA_DCHMAP_REG(ch->ch_index),
-	    __SHIFTIN(0, EDMA_DCHMAP_PAENTRY));
+	// TODO: implementation if we don't have chmap
+	if (sc->sc_has_chmap) {
+		EDMA_WRITE(sc, EDMA_DCHMAP_REG(ch->ch_index),
+		    __SHIFTIN(0, EDMA_DCHMAP_PAENTRY));
+	}
 }
 
 uint8_t

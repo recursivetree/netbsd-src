@@ -476,11 +476,13 @@ ti_sdhc_edma_init(struct ti_sdhc_softc *sc, u_int tx_chan, u_int rx_chan)
 
 	/* Allocate some PaRAM pages */
 	for (i = 0; i < __arraycount(sc->sc_edma_param_tx); i++) {
-		sc->sc_edma_param_tx[i] = edma_param_alloc(sc->sc_edma_tx);
+		sc->sc_edma_param_tx[i] = edma_param_alloc(sc->sc_edma_tx,
+		    (i == 0) ? EDMA_PARAM_TRIGGER : EDMA_PARAM_OTHER);
 		KASSERT(sc->sc_edma_param_tx[i] != 0xffff);
 	}
 	for (i = 0; i < __arraycount(sc->sc_edma_param_rx); i++) {
-		sc->sc_edma_param_rx[i] = edma_param_alloc(sc->sc_edma_rx);
+		sc->sc_edma_param_rx[i] = edma_param_alloc(sc->sc_edma_rx,
+		    (i == 0) ? EDMA_PARAM_TRIGGER : EDMA_PARAM_OTHER);
 		KASSERT(sc->sc_edma_param_rx[i] != 0xffff);
 	}
 

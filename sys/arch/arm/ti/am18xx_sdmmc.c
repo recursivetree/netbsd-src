@@ -772,7 +772,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	}
 	/* escape fdt_dma because it's interface doesn't match the edma */
 	sc->sc_rx_chan = rx_dma->dma_priv;
-	sc->sc_rx_param = edma_param_alloc(sc->sc_rx_chan);
+	sc->sc_rx_param = edma_param_alloc(sc->sc_rx_chan, EDMA_PARAM_TRIGGER);
 	if (sc->sc_rx_param == 0xffff) {
 		aprint_error(": couldn't get rx dma param entry\n");
 		return;
@@ -787,7 +787,7 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 	}
 	/* escape fdt_dma because it's interface doesn't match the edma */
 	sc->sc_tx_chan = tx_dma->dma_priv;
-	sc->sc_tx_param = edma_param_alloc(sc->sc_tx_chan);
+	sc->sc_tx_param = edma_param_alloc(sc->sc_tx_chan, EDMA_PARAM_TRIGGER);
 	if (sc->sc_tx_param == 0xffff) {
 		aprint_error(": couldn't get tx dma param entry\n");
 		return;

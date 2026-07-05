@@ -46,8 +46,9 @@ __KERNEL_RCSID(0, "$NetBSD: ti_edma.c,v 1.5 2022/05/21 19:07:23 andvar Exp $");
 #define MAX_PARAM_SETS		256
 #define MAX_PARAM_PER_CHANNEL	32
 
+#define EDMA_DEBUG
 #ifdef EDMA_DEBUG
-int edmadebug = 1;
+int edmadebug = 10;
 #define DPRINTF(n,s)    do { if ((n) <= edmadebug) device_printf s; } while (0)
 #else
 #define DPRINTF(n,s)    do {} while (0)
@@ -323,6 +324,7 @@ edma_fdt_acquire(device_t dev, const void *data, size_t len, void (*cb)(void *),
 		return NULL;
 	}
 	const u_int chan_index = be32toh(specifier[0]);
+	printf("edma_fdt_acquire chan_index=%d\n", chan_index);
 
 	return edma_channel_alloc_internal(sc, EDMA_TYPE_DMA, chan_index, cb,
 	    cbarg);
@@ -449,6 +451,8 @@ edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
 	}
 	mutex_exit(&sc->sc_lock);
 
+	DPRINTF(1, (sc->sc_dev, "edma_param_alloc: giving %d\n", param_entry));
+
 	return param_entry;
 }
 
@@ -529,7 +533,7 @@ edma_transfer_start(struct edma_channel *ch)
 	uint32_t bit = __BIT(ch->ch_index < 32 ?
 			     ch->ch_index : ch->ch_index - 32);
 
-	DPRINTF(1, (sc->sc_dev, "start transfer ch# %d off %d bit %x pe %d\n", ch->ch_index, (int)off, bit));
+	DPRINTF(1, (sc->sc_dev, "start transfer ch# %d off %d bit %x\n", ch->ch_index, (int)off, bit));
 
 	EDMA_WRITE(sc, EDMA_ESR_REG + off, bit);
 	return 0;

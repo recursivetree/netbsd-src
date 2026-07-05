@@ -160,6 +160,7 @@ struct am18xx_sdmmc_softc {
 	bool sc_irq_wait;
 	bool sc_command_done;
 	bool sc_transfer_done;
+	bool sc_dma_done;
 	bool sc_opendrain;
 	bool sc_firstcmd;
 };
@@ -184,6 +185,8 @@ static void	am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *,
     struct sdmmc_command *);
 static void	am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *,
     struct sdmmc_command *);
+static void	am18xx_sdmmc_check_completion(struct am18xx_sdmmc_softc *,
+    bool);
 static void	am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
 static int	am18xx_sdmmc_intr(void *);
@@ -376,9 +379,12 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		if (err == EWOULDBLOCK) {
 			device_printf(sc->sc_dev, "command timeout");
 			cmd->c_error = ETIMEDOUT;
+			//edma_dump(sc->sc_rx_chan);
 			goto out;
 		}
 	}
+
+	// TODO: halt DMA
 
 	/* read the command response */
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
@@ -409,6 +415,8 @@ out:
 static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
     struct sdmmc_command *cmd)
 {
+	bool use_dma = cmd->c_data != NULL && cmd->c_datalen >= 64;
+
 	/* write block size settings */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCBLEN, cmd->c_blklen);
 	if (cmd->c_blklen != 0) {
@@ -447,7 +455,7 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 	if (cmd->c_data != NULL && cmd->c_datalen > 0) {
 		/* command has data transfer */
 		command |= AM18XX_SDMMC_MMCCMD_WDATX;
-		command |= AM18XX_SDMMC_MMCCMD_DMATRIG;
+		command |= AM18XX_SDMMC_MMCCMD_DMATRIG; // TODO: figure out when exactly
 	}
 	if (sc->sc_firstcmd) {
 		command |= AM18XX_SDMMC_MMCCMD_INITCK;
@@ -472,17 +480,15 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 			AM18XX_SDMMC_FIFOCTL_FIFODIRW);
 	}
 
-	if (cmd->c_data != NULL && cmd->c_datalen >= 64) {
+	sc->sc_command_done = false;
+	sc->sc_transfer_done = cmd->c_datalen == 0 || cmd->c_data == NULL;
+	sc->sc_dma_done = !use_dma;
+
+	if (use_dma) {
 		am18xx_sdmmc_initiate_dma_transfer(sc, cmd);
 	} else if (cmd->c_data != NULL) {
 		am18xx_sdmmc_initiate_cpu_transfer(sc, cmd);
 	}
-
-	cmd->c_error = 0;
-	sc->sc_command_done = false;
-	sc->sc_transfer_done = cmd->c_datalen == 0 || cmd->c_data == NULL;
-	cmd->c_buf = cmd->c_data;
-	cmd->c_resid = cmd->c_datalen;
 
 	/* write command arguments */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCTOR, 0x1FFF);
@@ -496,6 +502,8 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
     struct sdmmc_command *cmd)
 {
+	cmd->c_resid = 0;
+
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
 
@@ -504,7 +512,7 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
 	KASSERT(cmd->c_datalen >= 64);
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 
-	printf("the driver: preparing DMA %d\n", cmd->c_datalen / 64);
+	printf("the driver: preparing DMA %d %d\n", cmd->c_datalen / 64, cmd->c_datalen);
 
 	struct edma_channel *channel;
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
@@ -515,23 +523,25 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
 
 	// TODO: range checks
 	KASSERT(cmd->c_datalen / 64 <= 65535);
-	KASSERT(cmd->c_dmaseg == 1);
 	KASSERT(cmd->c_dmamap->dm_nsegs == 1);
 
-	/* Do an A-synchronized transfer */
+	/* Do an AB-synchronized transfer */
 	struct edma_param transfer;
-	transfer.ep_opt = __SHIFTIN(edma_channel_index(channel), EDMA_PARAM_OPT_TCC) | EDMA_PARAM_OPT_TCINTEN;
-	transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR; // OK
-	transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;	// OK?
-	transfer.ep_acnt = 64; // one FIFO full is 64 bytes 	// OK
-	transfer.ep_bcnt = cmd->c_datalen / 64;			// OK
-	transfer.ep_ccnt = 1;					// OK
-	transfer.ep_dstbidx = 64;				// OK
-	transfer.ep_dstcidx = 0;				// OK
-	transfer.ep_srcbidx = 0;				// OK?
-	transfer.ep_srccidx = 0;				// OK?
-	transfer.ep_bcntrld = 0;				// OK!
-	transfer.ep_link = 0xFFFF;				// OK
+	transfer.ep_opt = __SHIFTIN(edma_channel_index(channel), EDMA_PARAM_OPT_TCC) | EDMA_PARAM_OPT_TCINTEN | EDMA_PARAM_OPT_SYNCDIM;
+	transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR;
+	transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;
+	transfer.ep_acnt = 4;
+	transfer.ep_bcnt = 16;
+	transfer.ep_ccnt = cmd->c_datalen / 64;
+	transfer.ep_dstbidx = 4;
+	transfer.ep_dstcidx = 64;
+	transfer.ep_srcbidx = 0;
+	transfer.ep_srccidx = 0;
+	transfer.ep_bcntrld = 0;
+	transfer.ep_link = 0xFFFF;
+
+	edma_halt(channel); // TODO: remove in the future (rn to clear pending events)
+	//edma_dump(channel);
 
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
@@ -549,6 +559,9 @@ static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc,
 {
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
+
+	cmd->c_buf = cmd->c_data;
+	cmd->c_resid = cmd->c_datalen;
 }
 
 static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
@@ -635,12 +648,13 @@ am18xx_sdmmc_intr(void *arg)
 	/* ensure we have the lock while touching the softcore */
 	mutex_enter(&sc->sc_lock);
 
-	/* ensure this only runs if we expect irqs */
-	KASSERT(sc->sc_irq_wait);
-
 	/* Read the interrupt cause; handle it. The order in which we deal with
 	 * different interrupt reasons matters a great deal. */
 	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+	printf("irq cause %x\n", cause);
+
+	/* ensure this only runs if we expect irqs */
+	KASSERT(sc->sc_irq_wait);
 
 	/* 1. Service the FIFO until it is empty/full (depending on if we are
 	 * reading or writing). We can complete multiple FIFO loads in one
@@ -685,11 +699,9 @@ am18xx_sdmmc_intr(void *arg)
 	}
 
 	/* signal the main thread if we are done */
-	if ((sc->sc_command_done && sc->sc_transfer_done) || cmd_failed) {
-		KASSERT(sc->sc_cmd->c_resid == 0);
-		sc->sc_irq_wait = false;
-		cv_signal(&sc->sc_intr_cv);
-	}
+	am18xx_sdmmc_check_completion(sc, cmd_failed);
+
+	printf("irq cause2 %x\n", cause);
 
 	mutex_exit(&sc->sc_lock);
 	return 1; /* acknowledge IRQ */
@@ -700,6 +712,29 @@ am18xx_sdmmc_dma_callback(void *priv)
 {
 	/* todo */
 	printf("dma callback reached!\n");
+
+	struct am18xx_sdmmc_softc *sc = priv;
+
+	/* ensure we have the lock while touching the softcore */
+	mutex_enter(&sc->sc_lock);
+
+	sc->sc_dma_done = true;
+	am18xx_sdmmc_check_completion(sc, false);
+
+	mutex_exit(&sc->sc_lock);
+}
+
+static void
+am18xx_sdmmc_check_completion(struct am18xx_sdmmc_softc *sc, bool has_err)
+{
+	bool completed = sc->sc_command_done && sc->sc_transfer_done && sc->sc_dma_done;
+
+	if (completed || has_err) {
+		KASSERT(sc->sc_cmd->c_resid == 0);
+		sc->sc_irq_wait = false;
+		printf("completing \n");
+		cv_signal(&sc->sc_intr_cv);
+	}
 }
 
 int

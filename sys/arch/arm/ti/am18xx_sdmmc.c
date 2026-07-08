@@ -111,8 +111,6 @@
 #define AM18XX_SDMMC_MMCIM_ECRCRS	__BIT(7)
 #define AM18XX_SDMMC_MMCIM_EDXRDY	__BIT(9)
 #define AM18XX_SDMMC_MMCIM_EDRRDY	__BIT(10)
-#define AM18XX_SDMMC_MMCIM_EDATED	__BIT(11)
-#define AM18XX_SDMMC_MMCIM_ETRNDNE	__BIT(12)
 
 #define AM18XX_SDMMC_MMCCMD_CMD		__BITS(5,0)
 #define AM18XX_SDMMC_MMCCMD_PPLEN	__BIT(7)
@@ -593,17 +591,16 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 	/* enable the clock */
 	am18xx_sdmmc_bus_clock(sc, 400);
 
-	/* enable the interrupts we want */
+	/* enable interrupts  */
 	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, AM18XX_SDMMC_MMCIM_EDATDNE |
 					    AM18XX_SDMMC_MMCIM_ERSPDNE |
 					    AM18XX_SDMMC_MMCIM_ETOUTRD |
 					    AM18XX_SDMMC_MMCIM_ETOUTRS |
-					    AM18XX_SDMMC_MMCIM_ECRCWR  |
-					    AM18XX_SDMMC_MMCIM_ECRCRD  |
-					    AM18XX_SDMMC_MMCIM_ECRCRS  |
-					    AM18XX_SDMMC_MMCIM_EDXRDY  |
-					    AM18XX_SDMMC_MMCIM_EDRRDY  |
-					    AM18XX_SDMMC_MMCIM_EDATED);
+					    AM18XX_SDMMC_MMCIM_ECRCWR |
+					    AM18XX_SDMMC_MMCIM_ECRCRD |
+					    AM18XX_SDMMC_MMCIM_ECRCRS |
+					    AM18XX_SDMMC_MMCIM_EDXRDY |
+					    AM18XX_SDMMC_MMCIM_EDRRDY);
 }
 
 static uint32_t
@@ -651,7 +648,7 @@ am18xx_sdmmc_intr(void *arg)
 	/* Read the interrupt cause; handle it. The order in which we deal with
 	 * different interrupt reasons matters a great deal. */
 	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-	printf("irq cause %x\n", cause);
+	if (cause == 0) return 1; /* there is a low chance this happens */
 
 	/* ensure this only runs if we expect irqs */
 	KASSERT(sc->sc_irq_wait);

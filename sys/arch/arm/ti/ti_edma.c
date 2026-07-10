@@ -32,6 +32,7 @@ __KERNEL_RCSID(0, "$NetBSD: ti_edma.c,v 1.5 2022/05/21 19:07:23 andvar Exp $");
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/conf.h>
+#include <sys/errno.h>
 #include <sys/intr.h>
 #include <sys/mutex.h>
 #include <sys/bus.h>
@@ -63,6 +64,7 @@ struct edma_channel {
 	void (*ch_callback)(void *);
 	void *ch_callbackarg;
 	unsigned int ch_nparams;
+	uint16_t ch_ownedparams[MAX_PARAM_PER_CHANNEL];
 };
 
 struct edma_softc {
@@ -95,6 +97,9 @@ static void edma_bit_set(uint32_t *, unsigned int);
 static void edma_bit_clr(uint32_t *, unsigned int);
 static void * edma_fdt_acquire(device_t, const void *, size_t,
     void (*)(void *), void *);
+static void edma_fdt_release(device_t, void *);
+static int edma_fdt_transfer(device_t, void *, struct fdtbus_dma_req *);
+static void edma_fdt_halt(device_t, void *);
 static struct edma_channel *edma_channel_alloc_internal(struct edma_softc *,
     enum edma_type, unsigned int, void (*)(void *), void *);
 
@@ -109,9 +114,9 @@ CFATTACH_DECL_NEW(ti_edma, sizeof(struct edma_softc),
 /* we only use the fdt system to get the controller to consumers */
 static const struct fdtbus_dma_controller_func edma_fdt_funcs = {
 	.acquire = edma_fdt_acquire,
-	.release = NULL, /* unimplemented*/
-	.transfer = NULL, /* unimplemented*/
-	.halt = NULL, /* unimplemented*/
+	.release = edma_fdt_release,
+	.transfer = edma_fdt_transfer,
+	.halt = edma_fdt_halt
 };
 
 static const struct device_compatible_entry compat_data[] = {
@@ -304,7 +309,16 @@ edma_intr(void *priv)
 		if (!edma_bit_isset(sc->sc_dmamask, idx))
 			continue;
 
-		sc->sc_dma[idx].ch_callback(sc->sc_dma[idx].ch_callbackarg);
+		struct edma_channel *chan = &sc->sc_dma[idx];
+
+		mutex_enter(&sc->sc_lock);
+		int num_params = chan->ch_nparams;
+		for (int i = 0; i < num_params; i++) {
+			edma_param_free(chan, chan->ch_ownedparams[i]);
+		}
+		mutex_exit(&sc->sc_lock);
+
+		chan->ch_callback(sc->sc_dma[idx].ch_callbackarg);
 	}
 
 	EDMA_WRITE(sc, EDMA_IEVAL_REG, EDMA_IEVAL_EVAL);
@@ -329,6 +343,78 @@ edma_fdt_acquire(device_t dev, const void *data, size_t len, void (*cb)(void *),
 	return edma_channel_alloc_internal(sc, EDMA_TYPE_DMA, chan_index, cb,
 	    cbarg);
 }
+
+static void
+edma_fdt_release(device_t dev, void *priv)
+{
+	struct edma_channel *chan = priv;
+
+	edma_channel_free(chan);
+}
+
+static int
+edma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
+{
+	struct edma_channel *chan = priv;
+	struct edma_param transfer;
+	int acnt, bcnt, ccnt;
+
+	KASSERT(req->dreq_nsegs == 1);
+	KASSERT(req->dreq_segs[0].ds_len <= UINT32_MAX);
+
+	acnt = req->dreq_dev_opt.opt_bus_width;
+	bcnt = req->dreq_dev_opt.opt_burst_len / acnt;
+	KASSERT(req->dreq_segs[0].ds_len % (acnt * bcnt) == 0);
+	ccnt = req->dreq_segs[0].ds_len / (acnt * bcnt);
+	KASSERT(acnt <= UINT16_MAX);
+	KASSERT(bcnt <= UINT16_MAX);
+	KASSERT(ccnt <= UINT16_MAX);
+
+	/* Do an AB-synchronized transfer */
+	transfer.ep_opt =
+	    __SHIFTIN(edma_channel_index(chan), EDMA_PARAM_OPT_TCC) |
+	    EDMA_PARAM_OPT_TCINTEN |
+	    EDMA_PARAM_OPT_SYNCDIM;
+	transfer.ep_acnt = acnt;
+	transfer.ep_bcnt = bcnt;
+	transfer.ep_ccnt = ccnt;
+	transfer.ep_bcntrld = 0;
+	transfer.ep_link = 0xFFFF;
+
+	if (req->dreq_dir == FDT_DMA_READ) {
+		transfer.ep_src = req->dreq_dev_phys;
+		transfer.ep_dst = req->dreq_segs[0].ds_addr;
+		transfer.ep_dstbidx = acnt;
+		transfer.ep_dstcidx = acnt * bcnt;
+		transfer.ep_srcbidx = 0;
+		transfer.ep_srccidx = 0;
+	} else {
+		transfer.ep_src = req->dreq_segs[0].ds_addr;
+		transfer.ep_dst = req->dreq_dev_phys;
+		transfer.ep_dstbidx = 0;
+		transfer.ep_dstcidx = 0;
+		transfer.ep_srcbidx = acnt;
+		transfer.ep_srccidx = acnt * bcnt;
+	}
+
+	uint16_t param = edma_param_alloc(chan, EDMA_PARAM_TRIGGER);
+	if (param == 0xFFFF) {
+		return EBUSY;
+	}
+	edma_set_param(chan, param, &transfer);
+	edma_transfer_enable(chan, param);
+
+	return 0;
+}
+
+static void
+edma_fdt_halt(device_t dev, void *priv)
+{
+	struct edma_channel *chan = priv;
+
+	edma_halt(chan);
+}
+
 
 struct edma_channel *
 edma_channel_alloc(enum edma_type type, unsigned int drq,
@@ -433,7 +519,8 @@ edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
 	if (!sc->sc_has_chmap && usage == EDMA_PARAM_TRIGGER) {
 		param_entry = ch->ch_index;
 		if (edma_bit_isset(sc->sc_parammask,  param_entry)) {
-			return 0xffff;
+			param_entry = 0xffff;
+			goto out;
 		}
 	} else {
 		/* we can allocate any PaRAM */
@@ -447,11 +534,12 @@ edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
 	}
 	if (param_entry != 0xffff) {
 		edma_bit_set(sc->sc_parammask, param_entry);
-		ch->ch_nparams++;
+		ch->ch_ownedparams[ch->ch_nparams++] = param_entry;
 	}
-	mutex_exit(&sc->sc_lock);
-
 	DPRINTF(1, (sc->sc_dev, "edma_param_alloc: giving %d\n", param_entry));
+
+out:
+	mutex_exit(&sc->sc_lock);
 
 	return param_entry;
 }
@@ -468,10 +556,8 @@ edma_param_free(struct edma_channel *ch, uint16_t param_entry)
 	KASSERT(ch->ch_nparams > 0);
 	KASSERT(edma_bit_isset(sc->sc_parammask, param_entry));
 
-	mutex_enter(&sc->sc_lock);
 	edma_bit_clr(sc->sc_parammask, param_entry);
 	ch->ch_nparams--;
-	mutex_exit(&sc->sc_lock);
 }
 
 /*
@@ -612,6 +698,7 @@ edma_dump_param(struct edma_channel *ch, uint16_t param_entry)
 		uint16_t off;
 	} regs[] = {
 		{ "OPT", EDMA_PARAM_OPT_REG(param_entry) },
+		{ "SRC", EDMA_PARAM_SRC_REG(param_entry) },
 		{ "CNT", EDMA_PARAM_CNT_REG(param_entry) },
 		{ "DST", EDMA_PARAM_DST_REG(param_entry) },
 		{ "BIDX", EDMA_PARAM_BIDX_REG(param_entry) },

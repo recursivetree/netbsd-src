@@ -712,18 +712,11 @@ sdmmc_function_alloc(struct sdmmc_softc *sc)
 		    &sf->bbuf, BUS_DMA_WAITOK);
 		if (error)
 			goto fail3;
-		error = bus_dmamap_load(sc->sc_dmat, sf->bbuf_dmap,
-		    sf->bbuf, MAXPHYS, NULL,
-		    BUS_DMA_WAITOK|BUS_DMA_READ|BUS_DMA_WRITE);
-		if (error)
-			goto fail4;
 		error = bus_dmamap_create(sc->sc_dmat, MAXPHYS, 1,
 		    MAXPHYS, 0, BUS_DMA_WAITOK, &sf->sseg_dmap);
 		if (!error)
 			goto out;
 
-		bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
-fail4:
 		bus_dmamem_unmap(sc->sc_dmat, sf->bbuf, MAXPHYS);
 fail3:
 		bus_dmamem_free(sc->sc_dmat, &ds, 1);
@@ -746,7 +739,6 @@ sdmmc_function_free(struct sdmmc_function *sf)
 	if (ISSET(sc->sc_flags, SMF_MEM_MODE) &&
 	    ISSET(sc->sc_caps, SMC_CAPS_DMA)) {
 		bus_dmamap_destroy(sc->sc_dmat, sf->sseg_dmap);
-		bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
 		bus_dmamem_unmap(sc->sc_dmat, sf->bbuf, MAXPHYS);
 		bus_dmamem_free(sc->sc_dmat,
 		    sf->bbuf_dmap->dm_segs, sf->bbuf_dmap->dm_nsegs);

@@ -2054,12 +2054,18 @@ sdmmc_mem_single_segment_dma_read_block(struct sdmmc_function *sf,
 		}
 	}
 	if (use_bbuf) {
+		error = bus_dmamap_load(sc->sc_dmat, sf->bbuf_dmap,
+		    sf->bbuf, datalen, NULL, BUS_DMA_NOWAIT|BUS_DMA_READ);
+		if (error)
+			return error;
+
 		bus_dmamap_sync(sc->sc_dmat, sf->bbuf_dmap, 0, datalen,
 		    BUS_DMASYNC_PREREAD);
 
 		error = sdmmc_mem_read_block_subr(sf, sf->bbuf_dmap,
 		    blkno, data, datalen);
 		if (error) {
+			bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
 			return error;
 		}
 
@@ -2068,6 +2074,8 @@ sdmmc_mem_single_segment_dma_read_block(struct sdmmc_function *sf,
 
 		/* Copy from bounce buffer */
 		memcpy(data, sf->bbuf, datalen);
+
+		bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
 
 		return 0;
 	}
@@ -2289,17 +2297,25 @@ sdmmc_mem_single_segment_dma_write_block(struct sdmmc_function *sf,
 		/* Copy to bounce buffer */
 		memcpy(sf->bbuf, data, datalen);
 
+		error = bus_dmamap_load(sc->sc_dmat, sf->bbuf_dmap,
+		    sf->bbuf, datalen, NULL, BUS_DMA_NOWAIT|BUS_DMA_WRITE);
+		if (error)
+			return error;
+
 		bus_dmamap_sync(sc->sc_dmat, sf->bbuf_dmap, 0, datalen,
 		    BUS_DMASYNC_PREWRITE);
 
 		error = sdmmc_mem_write_block_subr(sf, sf->bbuf_dmap,
 		    blkno, data, datalen);
 		if (error) {
+			bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
 			return error;
 		}
 
 		bus_dmamap_sync(sc->sc_dmat, sf->bbuf_dmap, 0, datalen,
 		    BUS_DMASYNC_POSTWRITE);
+
+		bus_dmamap_unload(sc->sc_dmat, sf->bbuf_dmap);
 
 		return 0;
 	}

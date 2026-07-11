@@ -43,7 +43,6 @@ __KERNEL_RCSID(0, "$NetBSD: ti_sdhc.c,v 1.12 2022/02/06 15:52:20 jmcneill Exp $"
 #include <sys/bus.h>
 
 #include <arm/ti/ti_prcm.h>
-#include <arm/ti/ti_edma.h>
 #include <arm/ti/ti_sdhcreg.h>
 
 #include <dev/sdmmc/sdhcreg.h>

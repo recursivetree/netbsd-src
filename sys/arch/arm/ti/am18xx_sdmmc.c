@@ -44,8 +44,6 @@
 #include <dev/sdmmc/sdmmcreg.h>
 #include <dev/sdmmc/sdmmcvar.h>
 
-#include <arm/ti/ti_edma.h>
-
 #define	SDMMC_READ(sc, reg)					\
 	bus_space_read_4((sc)->sc_bst, (sc)->sc_bsh, reg)
 #define	SDMMC_WRITE(sc, reg, val)				\
@@ -148,11 +146,10 @@ struct am18xx_sdmmc_softc {
 	struct clk *sc_clk;
 
 	/* edma */
-	uint32_t sc_phys_base_addr;
-	struct edma_channel *sc_rx_chan;
-	struct edma_channel *sc_tx_chan;
-	uint16_t sc_rx_param;
-	uint16_t sc_tx_param;
+	bus_addr_t sc_phys_base_addr;
+	struct fdtbus_dma *sc_rx_dma;
+	struct fdtbus_dma *sc_tx_dma;
+	struct fdtbus_dma_req sc_dma_req;
 
 	/* status flags */
 	bool sc_irq_wait;
@@ -371,18 +368,26 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	am18xx_sdmmc_initiate_command(sc, cmd);
 
 	/* wait for a response */
-	int err;
+	int err = 0;
 	while (sc->sc_irq_wait) {
 		err = cv_timedwait(&sc->sc_intr_cv, &sc->sc_lock, mstohz(1000));
 		if (err == EWOULDBLOCK) {
-			device_printf(sc->sc_dev, "command timeout");
+			device_printf(sc->sc_dev, "command timeout\n");
 			cmd->c_error = ETIMEDOUT;
-			//edma_dump(sc->sc_rx_chan);
-			goto out;
+			break;
 		}
 	}
 
-	// TODO: halt DMA
+	/* halt the dma transaction */
+	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
+		fdtbus_dma_halt(sc->sc_rx_dma);
+	} else {
+		fdtbus_dma_halt(sc->sc_tx_dma);
+	}
+	
+	if (cmd->c_error) {
+		goto out;
+	}
 
 	/* read the command response */
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
@@ -510,45 +515,20 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
 	KASSERT(cmd->c_datalen >= 64);
 	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 
-	printf("the driver: preparing DMA %d %d\n", cmd->c_datalen / 64, cmd->c_datalen);
-
-	struct edma_channel *channel;
-	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-		channel = sc->sc_rx_chan;
-	} else {
-		channel = sc->sc_tx_chan;
-	}
-
-	// TODO: range checks
-	KASSERT(cmd->c_datalen / 64 <= 65535);
-	KASSERT(cmd->c_dmamap->dm_nsegs == 1);
-
-	/* Do an AB-synchronized transfer */
-	struct edma_param transfer;
-	transfer.ep_opt = __SHIFTIN(edma_channel_index(channel), EDMA_PARAM_OPT_TCC) | EDMA_PARAM_OPT_TCINTEN | EDMA_PARAM_OPT_SYNCDIM;
-	transfer.ep_src = sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR;
-	transfer.ep_dst = cmd->c_dmamap->dm_segs[0].ds_addr;
-	transfer.ep_acnt = 4;
-	transfer.ep_bcnt = 16;
-	transfer.ep_ccnt = cmd->c_datalen / 64;
-	transfer.ep_dstbidx = 4;
-	transfer.ep_dstcidx = 64;
-	transfer.ep_srcbidx = 0;
-	transfer.ep_srccidx = 0;
-	transfer.ep_bcntrld = 0;
-	transfer.ep_link = 0xFFFF;
-
-	edma_halt(channel); // TODO: remove in the future (rn to clear pending events)
-	//edma_dump(channel);
+	/* initiate DMA transfer */
+	sc->sc_dma_req.dreq_segs = cmd->c_dmamap->dm_segs;
+	sc->sc_dma_req.dreq_nsegs = cmd->c_dmamap->dm_nsegs;
 
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
-		edma_set_param(sc->sc_rx_chan, sc->sc_rx_param,
-		    &transfer);
-		edma_transfer_enable(sc->sc_rx_chan, sc->sc_rx_param);
+		sc->sc_dma_req.dreq_dev_phys =
+		    sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDRR;
+		sc->sc_dma_req.dreq_dir = FDT_DMA_READ;
+		fdtbus_dma_transfer(sc->sc_rx_dma, &sc->sc_dma_req);
 	} else {
-		edma_set_param(sc->sc_tx_chan, sc->sc_tx_param,
-		    &transfer);
-		edma_transfer_enable(sc->sc_tx_chan, sc->sc_tx_param);
+		sc->sc_dma_req.dreq_dev_phys =
+		    sc->sc_phys_base_addr + AM18XX_SDMMC_MMCDXR;
+		sc->sc_dma_req.dreq_dir = FDT_DMA_WRITE;
+		fdtbus_dma_transfer(sc->sc_tx_dma, &sc->sc_dma_req);
 	}
 }
 
@@ -698,8 +678,6 @@ am18xx_sdmmc_intr(void *arg)
 	/* signal the main thread if we are done */
 	am18xx_sdmmc_check_completion(sc, cmd_failed);
 
-	printf("irq cause2 %x\n", cause);
-
 	mutex_exit(&sc->sc_lock);
 	return 1; /* acknowledge IRQ */
 }
@@ -707,9 +685,6 @@ am18xx_sdmmc_intr(void *arg)
 static void
 am18xx_sdmmc_dma_callback(void *priv)
 {
-	/* todo */
-	printf("dma callback reached!\n");
-
 	struct am18xx_sdmmc_softc *sc = priv;
 
 	/* ensure we have the lock while touching the softcore */
@@ -729,7 +704,6 @@ am18xx_sdmmc_check_completion(struct am18xx_sdmmc_softc *sc, bool has_err)
 	if (completed || has_err) {
 		KASSERT(sc->sc_cmd->c_resid == 0);
 		sc->sc_irq_wait = false;
-		printf("completing \n");
 		cv_signal(&sc->sc_intr_cv);
 	}
 }
@@ -795,33 +769,25 @@ am18xx_sdmmc_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	/* rx dma channels */
-	struct fdtbus_dma *rx_dma = fdtbus_dma_get(phandle, "rx",
-	    am18xx_sdmmc_dma_callback, sc);
-	if (rx_dma == NULL) {
-		aprint_error(": couldn't get rx dma handle\n");
-		return;
-	}
-	/* escape fdt_dma because it's interface doesn't match the edma */
-	sc->sc_rx_chan = rx_dma->dma_priv;
-	sc->sc_rx_param = edma_param_alloc(sc->sc_rx_chan, EDMA_PARAM_TRIGGER);
-	if (sc->sc_rx_param == 0xffff) {
-		aprint_error(": couldn't get rx dma param entry\n");
-		return;
-	}
 
-	/* tx dma channels */
-	struct fdtbus_dma *tx_dma = fdtbus_dma_get(phandle, "tx",
+	/* prepare DMA request */
+	memset(&sc->sc_dma_req, 0, sizeof(sc->sc_dma_req));
+	sc->sc_dma_req.dreq_block_irq = 1;
+	sc->sc_dma_req.dreq_block_multi = 0;
+	sc->sc_dma_req.dreq_dev_opt.opt_bus_width = 4;
+	sc->sc_dma_req.dreq_dev_opt.opt_burst_len = 64;
+	/* rx dma channels */
+	sc->sc_rx_dma = fdtbus_dma_get(phandle, "rx",
 	    am18xx_sdmmc_dma_callback, sc);
-	if (tx_dma == NULL) {
+	if (sc->sc_rx_dma == NULL) {
 		aprint_error(": couldn't get rx dma handle\n");
 		return;
 	}
-	/* escape fdt_dma because it's interface doesn't match the edma */
-	sc->sc_tx_chan = tx_dma->dma_priv;
-	sc->sc_tx_param = edma_param_alloc(sc->sc_tx_chan, EDMA_PARAM_TRIGGER);
-	if (sc->sc_tx_param == 0xffff) {
-		aprint_error(": couldn't get tx dma param entry\n");
+	/* tx dma channels */
+	sc->sc_tx_dma = fdtbus_dma_get(phandle, "tx",
+	    am18xx_sdmmc_dma_callback, sc);
+	if (sc->sc_tx_dma == NULL) {
+		aprint_error(": couldn't get tx dma handle\n");
 		return;
 	}
 

@@ -60,11 +60,6 @@ enum edma_type {
 	EDMA_TYPE_QDMA
 };
 
-enum edma_param_usage {
-	EDMA_PARAM_TRIGGER,	/* the first param of a transfer */
-	EDMA_PARAM_OTHER
-};
-
 struct edma_param {
 	uint32_t	ep_opt;
 	uint32_t	ep_src;
@@ -129,10 +124,10 @@ static void edma_fdt_halt(device_t, void *);
 static struct edma_channel *edma_channel_alloc(struct edma_softc *,
     enum edma_type, unsigned int, void (*)(void *), void *);
 static void edma_channel_free(struct edma_channel *);
-static uint16_t edma_param_alloc(struct edma_channel *, enum edma_param_usage);
+static int edma_channel_alloc_params(struct edma_channel *, int);
+static int edma_param_alloc(struct edma_channel *, uint16_t);
 static void edma_set_param(struct edma_channel *, uint16_t, struct edma_param *);
 static void edma_transfer_enable(struct edma_channel *, uint16_t);
-
 #ifdef notyet
 static void edma_transfer_start(struct edma_channel *);
 static void edma_dump(struct edma_channel *);
@@ -399,18 +394,9 @@ edma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 	KASSERT(bcnt <= UINT16_MAX);
 
 	/* allocate param entries */
-	KASSERT(chan->ch_nparams == 0);
-	for(int i = 0; i < req->dreq_nsegs; i++) {
-		uint16_t param = edma_param_alloc(chan,
-		    (i == 0) ? EDMA_PARAM_TRIGGER : EDMA_PARAM_OTHER);
-
-		if(param == 0xffff) {
-			/* failed to allocate, free all and return */
-			edma_channel_free_params(chan);
-			return EAGAIN;
-		}
-
-		chan->ch_ownedparams[i] = param;
+	int error = edma_channel_alloc_params(chan, req->dreq_nsegs);
+	if (error) {
+		return error;
 	}
 
 	/* fill param entries */
@@ -560,50 +546,74 @@ edma_channel_free(struct edma_channel *ch)
 }
 
 /*
- * Allocate a PaRAM entry. The driver artificially restricts the number
- * of PaRAM entries available for each channel to MAX_PARAM_PER_CHANNEL.
- * If the number of entries for the channel has been exceeded, or there
- * are no entries available, 0xffff is returned.
+ * Allocate 'params' PaRAM entries for channel. The driver artificially
+ * restricts the number of PaRAM entries available for each channel to
+ * MAX_PARAM_PER_CHANNEL. If the number of entries for the channel has been
+ * exceeded, or there are no entries available, an error is returned.
  */
-static uint16_t
-edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
+static int
+edma_channel_alloc_params(struct edma_channel *chan, int params)
 {
-	struct edma_softc *sc = ch->ch_sc;
-	uint16_t param_entry = 0xffff;
-	int idx;
+	struct edma_softc *sc = chan->ch_sc;
+	int error = 0;
+	int reserved = 0;
 
-	if (ch->ch_nparams == MAX_PARAM_PER_CHANNEL)
-		return param_entry;
+	KASSERT(chan->ch_nparams == 0);
+	KASSERT(params > 0);
+	KASSERT(params < MAX_PARAM_PER_CHANNEL);
 
 	mutex_enter(&sc->sc_lock);
 
-	/* without channel map, some params need to be in a specific place */
-	if (!sc->sc_has_chmap && usage == EDMA_PARAM_TRIGGER) {
-		param_entry = ch->ch_index;
-		if (edma_bit_isset(sc->sc_parammask,  param_entry)) {
-			param_entry = 0xffff;
+	/*
+	 * Older revision without channel map need the first entry in the chain
+	 * to be a specific entry. Try to allocate that first
+	 */
+	if (!sc->sc_has_chmap) {
+		uint16_t chan_param = chan->ch_index;
+		if (!edma_param_alloc(chan, chan_param)) {
 			goto out;
 		}
-	} else {
-		/* we can allocate any PaRAM */
-		//TODO: figure out why the first 32 channels aren't used
-		for (idx = 32; idx < sc->sc_num_params; idx++) {
-			if (!edma_bit_isset(sc->sc_parammask, idx)) {
-				param_entry = idx;
-				break;
-			}
+		chan->ch_ownedparams[reserved++] = chan_param;
+	}
+
+	/*
+	 * Try to allocate PaRAMs starting from after the PaRAMs reserved for
+	 * events.
+	 */
+	for (int i = 32; reserved < params && i < sc->sc_num_params; i++) {
+		if (edma_param_alloc(chan, i)) {
+			chan->ch_ownedparams[reserved++] = i;
 		}
 	}
-	if (param_entry != 0xffff) {
-		edma_bit_set(sc->sc_parammask, param_entry);
-		ch->ch_nparams++;
-	}
-	DPRINTF(1, (sc->sc_dev, "edma_param_alloc: giving %d\n", param_entry));
 
 out:
 	mutex_exit(&sc->sc_lock);
 
-	return param_entry;
+	if (reserved != params) {
+		edma_channel_free_params(chan);
+		error = EBUSY;
+		goto out;
+	}
+
+	return error;
+}
+
+/*
+ * Check if PaRAM param is available and reserve it if so. Return 1 if
+ * successful, 0 if not. The caller should hold sc->sc_lock.
+ */
+static int
+edma_param_alloc(struct edma_channel *chan, uint16_t param)
+{
+	struct edma_softc *sc = chan->ch_sc;
+	if (edma_bit_isset(sc->sc_parammask,  param)) {
+		return 0;
+	}
+
+	edma_bit_set(sc->sc_parammask, param);
+	chan->ch_nparams++;
+
+	return 1;
 }
 
 /*

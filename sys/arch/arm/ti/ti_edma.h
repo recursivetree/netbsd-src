@@ -166,7 +166,6 @@ struct edma_channel *edma_channel_alloc(enum edma_type, unsigned int,
 					void (*)(void *), void *);
 void edma_channel_free(struct edma_channel *);
 uint16_t edma_param_alloc(struct edma_channel *, enum edma_param_usage);
-void edma_param_free(struct edma_channel *, uint16_t);
 void edma_set_param(struct edma_channel *, uint16_t, struct edma_param *);
 int edma_transfer_enable(struct edma_channel *, uint16_t);
 int edma_transfer_start(struct edma_channel *);

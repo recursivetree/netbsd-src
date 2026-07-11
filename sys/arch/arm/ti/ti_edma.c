@@ -47,7 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD: ti_edma.c,v 1.5 2022/05/21 19:07:23 andvar Exp $");
 #define MAX_PARAM_SETS		256
 #define MAX_PARAM_PER_CHANNEL	32
 
-#define EDMA_DEBUG
+//#define EDMA_DEBUG
 #ifdef EDMA_DEBUG
 int edmadebug = 10;
 #define DPRINTF(n,s)    do { if ((n) <= edmadebug) device_printf s; } while (0)
@@ -92,6 +92,7 @@ static void edma_init(struct edma_softc *);
 static int edma_intr(void *);
 static void edma_write_param(struct edma_softc *,
 				  unsigned int, const struct edma_param *);
+static void edma_channel_free_params(struct edma_channel *);
 static bool edma_bit_isset(uint32_t *, unsigned int);
 static void edma_bit_set(uint32_t *, unsigned int);
 static void edma_bit_clr(uint32_t *, unsigned int);
@@ -216,8 +217,8 @@ edma_init(struct edma_softc *sc)
 	sc->sc_has_chmap = cccfg_val & EDMA_CCCFG_CHMAP_EXIST ? true : false;
 	sc->sc_num_channels = 2 << __SHIFTOUT(cccfg_val, EDMA_CCCFG_NUM_DMACH);
 	sc->sc_num_params = 16 << __SHIFTOUT(cccfg_val, EDMA_CCCFG_NUM_PAENTRY);
-	KASSERT(sc->sc_num_channels < MAX_DMA_CHANNELS);
-	KASSERT(sc->sc_num_params < MAX_PARAM_SETS);
+	KASSERT(sc->sc_num_channels <= MAX_DMA_CHANNELS);
+	KASSERT(sc->sc_num_params <= MAX_PARAM_SETS);
 
 	if (sc->sc_has_chmap) {
 		for (idx = 0; idx < sc->sc_num_channels; idx++) {
@@ -311,12 +312,7 @@ edma_intr(void *priv)
 
 		struct edma_channel *chan = &sc->sc_dma[idx];
 
-		mutex_enter(&sc->sc_lock);
-		int num_params = chan->ch_nparams;
-		for (int i = 0; i < num_params; i++) {
-			edma_param_free(chan, chan->ch_ownedparams[i]);
-		}
-		mutex_exit(&sc->sc_lock);
+		edma_channel_free_params(chan);
 
 		chan->ch_callback(sc->sc_dma[idx].ch_callbackarg);
 	}
@@ -359,50 +355,81 @@ edma_fdt_transfer(device_t dev, void *priv, struct fdtbus_dma_req *req)
 	struct edma_param transfer;
 	int acnt, bcnt, ccnt;
 
-	KASSERT(req->dreq_nsegs == 1);
-	KASSERT(req->dreq_segs[0].ds_len <= UINT32_MAX);
+	KASSERT(req->dreq_nsegs <= MAX_PARAM_PER_CHANNEL);
 
 	acnt = req->dreq_dev_opt.opt_bus_width;
-	bcnt = req->dreq_dev_opt.opt_burst_len / acnt;
-	KASSERT(req->dreq_segs[0].ds_len % (acnt * bcnt) == 0);
-	ccnt = req->dreq_segs[0].ds_len / (acnt * bcnt);
 	KASSERT(acnt <= UINT16_MAX);
+	KASSERT(req->dreq_dev_opt.opt_burst_len % acnt == 0);
+	bcnt = req->dreq_dev_opt.opt_burst_len / acnt;
 	KASSERT(bcnt <= UINT16_MAX);
-	KASSERT(ccnt <= UINT16_MAX);
 
-	/* Do an AB-synchronized transfer */
-	transfer.ep_opt =
-	    __SHIFTIN(edma_channel_index(chan), EDMA_PARAM_OPT_TCC) |
-	    EDMA_PARAM_OPT_TCINTEN |
-	    EDMA_PARAM_OPT_SYNCDIM;
-	transfer.ep_acnt = acnt;
-	transfer.ep_bcnt = bcnt;
-	transfer.ep_ccnt = ccnt;
-	transfer.ep_bcntrld = 0;
-	transfer.ep_link = 0xFFFF;
+	/* allocate param entries */
+	KASSERT(chan->ch_nparams == 0);
+	for(int i = 0; i < req->dreq_nsegs; i++) {
+		uint16_t param = edma_param_alloc(chan,
+		    (i == 0) ? EDMA_PARAM_TRIGGER : EDMA_PARAM_OTHER);
 
-	if (req->dreq_dir == FDT_DMA_READ) {
-		transfer.ep_src = req->dreq_dev_phys;
-		transfer.ep_dst = req->dreq_segs[0].ds_addr;
-		transfer.ep_dstbidx = acnt;
-		transfer.ep_dstcidx = acnt * bcnt;
-		transfer.ep_srcbidx = 0;
-		transfer.ep_srccidx = 0;
-	} else {
-		transfer.ep_src = req->dreq_segs[0].ds_addr;
-		transfer.ep_dst = req->dreq_dev_phys;
-		transfer.ep_dstbidx = 0;
-		transfer.ep_dstcidx = 0;
-		transfer.ep_srcbidx = acnt;
-		transfer.ep_srccidx = acnt * bcnt;
+		if(param == 0xffff) {
+			/* failed to allocate, free all and return */
+			edma_channel_free_params(chan);
+			return EAGAIN;
+		}
+
+		chan->ch_ownedparams[i] = param;
 	}
 
-	uint16_t param = edma_param_alloc(chan, EDMA_PARAM_TRIGGER);
-	if (param == 0xFFFF) {
-		return EBUSY;
+	/* fill param entries */
+	for(int i = 0; i < req->dreq_nsegs; i++) {
+		bus_dma_segment_t seg = req->dreq_segs[i];
+
+		KASSERT(seg.ds_len <= UINT32_MAX);
+		KASSERT(seg.ds_len % (acnt * bcnt) == 0);
+		ccnt = seg.ds_len / (acnt * bcnt);
+		KASSERT(ccnt <= UINT16_MAX);
+
+		/* Do an AB-synchronized transfer */
+		transfer.ep_opt =
+		    __SHIFTIN(edma_channel_index(chan), EDMA_PARAM_OPT_TCC)
+		    | EDMA_PARAM_OPT_SYNCDIM;
+		transfer.ep_acnt = acnt;
+		transfer.ep_bcnt = bcnt;
+		transfer.ep_ccnt = ccnt;
+		transfer.ep_bcntrld = 0;
+
+		if (i == req->dreq_nsegs - 1) {
+			transfer.ep_opt |= EDMA_PARAM_OPT_TCINTEN;
+			transfer.ep_link = 0xffff;
+		} else {
+			transfer.ep_link = EDMA_PARAM_BASE(chan->ch_ownedparams[i+1]);
+		}
+
+		if (req->dreq_sel == 1) {
+			transfer.ep_opt |= __SHIFTIN(2, EDMA_PARAM_OPT_FWID);
+			transfer.ep_opt |= (req->dreq_dir == FDT_DMA_READ)
+					       ? EDMA_PARAM_OPT_SAM
+					       : EDMA_PARAM_OPT_DAM;
+		}
+
+		if (req->dreq_dir == FDT_DMA_READ) {
+			transfer.ep_src = req->dreq_dev_phys;
+			transfer.ep_dst = seg.ds_addr;
+			transfer.ep_dstbidx = acnt;
+			transfer.ep_dstcidx = acnt * bcnt;
+			transfer.ep_srcbidx = 0;
+			transfer.ep_srccidx = 0;
+		} else {
+			transfer.ep_src = seg.ds_addr;
+			transfer.ep_dst = req->dreq_dev_phys;
+			transfer.ep_dstbidx = 0;
+			transfer.ep_dstcidx = 0;
+			transfer.ep_srcbidx = acnt;
+			transfer.ep_srccidx = acnt * bcnt;
+		}
+
+		edma_set_param(chan, chan->ch_ownedparams[i], &transfer);
 	}
-	edma_set_param(chan, param, &transfer);
-	edma_transfer_enable(chan, param);
+
+	edma_transfer_enable(chan, chan->ch_ownedparams[0]);
 
 	return 0;
 }
@@ -534,7 +561,7 @@ edma_param_alloc(struct edma_channel *ch, enum edma_param_usage usage)
 	}
 	if (param_entry != 0xffff) {
 		edma_bit_set(sc->sc_parammask, param_entry);
-		ch->ch_ownedparams[ch->ch_nparams++] = param_entry;
+		ch->ch_nparams++;
 	}
 	DPRINTF(1, (sc->sc_dev, "edma_param_alloc: giving %d\n", param_entry));
 
@@ -547,17 +574,24 @@ out:
 /*
  * Free a PaRAM entry allocated with edma_param_alloc
  */
-void
-edma_param_free(struct edma_channel *ch, uint16_t param_entry)
+static void
+edma_channel_free_params(struct edma_channel *chan)
 {
-	struct edma_softc *sc = ch->ch_sc;
+	struct edma_softc *sc = chan->ch_sc;
 
-	KASSERT(param_entry < sc->sc_num_params);
-	KASSERT(ch->ch_nparams > 0);
-	KASSERT(edma_bit_isset(sc->sc_parammask, param_entry));
+	mutex_enter(&sc->sc_lock);
+	int num_params = chan->ch_nparams;
+	for (int i = 0; i < num_params; i++) {
+		uint16_t param_entry = chan->ch_ownedparams[i];
 
-	edma_bit_clr(sc->sc_parammask, param_entry);
-	ch->ch_nparams--;
+		KASSERT(param_entry < sc->sc_num_params);
+		KASSERT(chan->ch_nparams > 0);
+		KASSERT(edma_bit_isset(sc->sc_parammask, param_entry));
+
+		edma_bit_clr(sc->sc_parammask, param_entry);
+		chan->ch_nparams--;
+	}
+	mutex_exit(&sc->sc_lock);
 }
 
 /*
@@ -647,6 +681,8 @@ edma_halt(struct edma_channel *ch)
 		EDMA_WRITE(sc, EDMA_DCHMAP_REG(ch->ch_index),
 		    __SHIFTIN(0, EDMA_DCHMAP_PAENTRY));
 	}
+
+	edma_channel_free_params(ch);
 }
 
 uint8_t

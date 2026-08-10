@@ -184,6 +184,7 @@ static void	am18xx_sdmmc_check_completion(struct am18xx_sdmmc_softc *,
     bool);
 static void	am18xx_sdmmc_card_enable_intr(sdmmc_chipset_handle_t, int);
 static void	am18xx_sdmmc_card_intr_ack(sdmmc_chipset_handle_t);
+static void	am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc);
 static int	am18xx_sdmmc_intr(void *);
 static void	am18xx_sdmmc_dma_callback(void *priv);
 
@@ -379,6 +380,7 @@ am18xx_sdmmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 	}
 
 	/* halt the dma transaction */
+	//TODO: only if we use dma
 	if (ISSET(cmd->c_flags, SCF_CMD_READ)) {
 		fdtbus_dma_halt(sc->sc_rx_dma);
 	} else {
@@ -458,7 +460,7 @@ static void am18xx_sdmmc_initiate_command(struct am18xx_sdmmc_softc *sc,
 	if (cmd->c_data != NULL && cmd->c_datalen > 0) {
 		/* command has data transfer */
 		command |= AM18XX_SDMMC_MMCCMD_WDATX;
-		command |= AM18XX_SDMMC_MMCCMD_DMATRIG; // TODO: figure out when exactly
+		command |= AM18XX_SDMMC_MMCCMD_DMATRIG;
 	}
 	if (sc->sc_firstcmd) {
 		command |= AM18XX_SDMMC_MMCCMD_INITCK;
@@ -507,13 +509,13 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
 {
 	cmd->c_resid = 0;
 
-	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+	//KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
 
 	KASSERT((cmd->c_datalen & 0x3f) == 0); /* data access is a multiple of fifo size */
 	/* transfer needs to be bigger than the FIFO size */
 	KASSERT(cmd->c_datalen >= 64);
-	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+	//KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 
 	/* initiate DMA transfer */
 	sc->sc_dma_req.dreq_segs = cmd->c_dmamap->dm_segs;
@@ -535,11 +537,16 @@ static void am18xx_sdmmc_initiate_dma_transfer(struct am18xx_sdmmc_softc *sc,
 static void am18xx_sdmmc_initiate_cpu_transfer(struct am18xx_sdmmc_softc *sc,
     struct sdmmc_command *cmd)
 {
-	KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
+	//KASSERT(ISSET(cmd->c_flags, SCF_CMD_READ)); /* write isn't implemented*/
 	KASSERT((cmd->c_datalen & 0x3) == 0); /* currently, we need word-sized sizes */
 
 	cmd->c_buf = cmd->c_data;
 	cmd->c_resid = cmd->c_datalen;
+
+	/* writes: shovel first load of data*/
+	if (!ISSET(cmd->c_flags, SCF_CMD_READ) && cmd->c_datalen > 0) {
+		am18xx_sdmmc_cpu_data_transfer(sc);
+	}
 }
 
 static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
@@ -583,37 +590,24 @@ static void am18xx_sdmmc_init(struct am18xx_sdmmc_softc *sc)
 					    AM18XX_SDMMC_MMCIM_EDRRDY);
 }
 
-static uint32_t
+static void
 am18xx_sdmmc_cpu_data_transfer(struct am18xx_sdmmc_softc *sc)
 {
-	/* Disable interrupts during cpu transfer. This allows us to capture
-	 * new interrupts and handle them in this interrupt instead of
-	 * generating a second interrupt. */
-	uint32_t mmcim = SDMMC_READ(sc, AM18XX_SDMMC_MMCIM);
-	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, 0);
+	/* process one FIFOfull of data */
+	for (int i = 0; i < (64 / 4) && sc->sc_cmd->c_resid > 0; i++) {
+		KASSERT((sc->sc_cmd->c_resid & 0x3) == 0);
 
-	KASSERT(ISSET(sc->sc_cmd->c_flags, SCF_CMD_READ));
-
-	uint32_t status, fullstatus = 0;
-	do {
-		/* read one FIFOfull of data */
-		for (int i = 0; i < (64 / 4) && sc->sc_cmd->c_resid > 0; i++) {
-			KASSERT((sc->sc_cmd->c_resid & 0x3) == 0);
-
-			*((uint32_t *)sc->sc_cmd->c_buf) =
-			    SDMMC_READ(sc, AM18XX_SDMMC_MMCDRR);
-			sc->sc_cmd->c_resid -= 4;
-			sc->sc_cmd->c_buf += 4;
+		if (ISSET(sc->sc_cmd->c_flags, SCF_CMD_READ)) {
+			*((uint32_t *)sc->sc_cmd->c_buf) = SDMMC_READ(
+			    sc, AM18XX_SDMMC_MMCDRR);
+		} else {
+			SDMMC_WRITE(sc, AM18XX_SDMMC_MMCDXR,
+			    *((uint32_t *)sc->sc_cmd->c_buf));
 		}
-		status = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-		fullstatus |= status;
-	} while (status & (AM18XX_SDMMC_MMCST0_DRRDY
-			 | AM18XX_SDMMC_MMCST0_DXRDY));
 
-	/* re-enable data receive/transmit interrupts*/
-	SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, mmcim);
-	/* and return our new interrupts */
-	return fullstatus;
+		sc->sc_cmd->c_resid -= 4;
+		sc->sc_cmd->c_buf += 4;
+	}
 }
 
 static int
@@ -641,7 +635,24 @@ am18xx_sdmmc_intr(void *arg)
 	 * deal with them without generating a second interrupt. We service
 	 * the FIFO first so we can deal with these new events later on. */
 	if (cause & (AM18XX_SDMMC_MMCST0_DRRDY | AM18XX_SDMMC_MMCST0_DXRDY )) {
-		cause |= am18xx_sdmmc_cpu_data_transfer(sc);
+		/* Disable interrupts during cpu transfer. This allows us to
+		 * capture new interrupts and handle them in this interrupt
+		 * instead of generating a second interrupt. */
+		uint32_t mmcim = SDMMC_READ(sc, AM18XX_SDMMC_MMCIM);
+		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, 0);
+
+		/* transfer one fido load for as long as there is space */
+		uint32_t status = 0;
+		do {
+			am18xx_sdmmc_cpu_data_transfer(sc);
+
+			status = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
+			cause |= status;
+		} while (status & (AM18XX_SDMMC_MMCST0_DRRDY
+				      | AM18XX_SDMMC_MMCST0_DXRDY));
+
+		/* re-enable data receive/transmit interrupts*/
+		SDMMC_WRITE(sc, AM18XX_SDMMC_MMCIM, mmcim);
 	}
 
 	/* 2. DATDNE indicates the data transfer is complete. If the data size
@@ -652,7 +663,9 @@ am18xx_sdmmc_intr(void *arg)
 	if (cause & AM18XX_SDMMC_MMCST0_DATDNE) {
 		if (sc->sc_cmd->c_resid > 0) {
 			/* transfer remaining outstanding data */
-			cause |= am18xx_sdmmc_cpu_data_transfer(sc);
+			am18xx_sdmmc_cpu_data_transfer(sc);
+			//TODO: this code region might generate new interrupts that lead to an sc_irq_wait kassert
+			cause |= SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
 		}
 		sc->sc_transfer_done = true;
 	}

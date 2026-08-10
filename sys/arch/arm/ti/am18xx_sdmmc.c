@@ -622,7 +622,7 @@ am18xx_sdmmc_intr(void *arg)
 	/* Read the interrupt cause; handle it. The order in which we deal with
 	 * different interrupt reasons matters a great deal. */
 	uint32_t cause = SDMMC_READ(sc, AM18XX_SDMMC_MMCST0);
-	if (cause == 0) return 1; /* there is a low chance this happens */
+	if (cause == 0) goto unlock_return;
 
 	/* ensure this only runs if we expect irqs */
 	KASSERT(sc->sc_irq_wait);
@@ -691,6 +691,7 @@ am18xx_sdmmc_intr(void *arg)
 	/* signal the main thread if we are done */
 	am18xx_sdmmc_check_completion(sc, cmd_failed);
 
+unlock_return:
 	mutex_exit(&sc->sc_lock);
 	return 1; /* acknowledge IRQ */
 }

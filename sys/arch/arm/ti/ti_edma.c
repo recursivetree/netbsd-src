@@ -34,6 +34,7 @@ __KERNEL_RCSID(0, "$NetBSD: ti_edma.c,v 1.5 2022/05/21 19:07:23 andvar Exp $");
 #include <sys/conf.h>
 #include <sys/errno.h>
 #include <sys/intr.h>
+#include <sys/kmem.h>
 #include <sys/mutex.h>
 #include <sys/bus.h>
 #include <sys/bitops.h>
@@ -92,7 +93,7 @@ struct edma_softc {
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_ioh;
 	kmutex_t sc_lock;
-	struct edma_channel sc_dma[MAX_DMA_CHANNELS];
+	struct edma_channel * sc_dma[MAX_DMA_CHANNELS];
 
 	void *sc_ih;
 
@@ -196,13 +197,7 @@ edma_attach(device_t parent, device_t self, void *aux)
 	aprint_normal(": EDMA Channel Controller\n");
 
 	for (idx = 0; idx < MAX_DMA_CHANNELS; idx++) {
-		struct edma_channel *ch = &sc->sc_dma[idx];
-		ch->ch_sc = sc;
-		ch->ch_type = EDMA_TYPE_DMA;
-		ch->ch_index = idx;
-		ch->ch_callback = NULL;
-		ch->ch_callbackarg = NULL;
-		ch->ch_nparams = 0;
+		sc->sc_dma[idx] = NULL;
 	}
 
 	if (of_hasprop(phandle, "power-domains")) {
@@ -340,11 +335,13 @@ edma_intr(void *priv)
 		if (!edma_bit_isset(sc->sc_dmamask, idx))
 			continue;
 
-		struct edma_channel *chan = &sc->sc_dma[idx];
+		struct edma_channel *chan = sc->sc_dma[idx];
+		if (chan == NULL)
+			continue;
 
 		edma_channel_free_params(chan);
 
-		chan->ch_callback(sc->sc_dma[idx].ch_callbackarg);
+		chan->ch_callback(chan->ch_callbackarg);
 	}
 
 	EDMA_WRITE(sc, EDMA_IEVAL_REG, EDMA_IEVAL_EVAL);
@@ -364,7 +361,6 @@ edma_fdt_acquire(device_t dev, const void *data, size_t len, void (*cb)(void *),
 		return NULL;
 	}
 	const u_int chan_index = be32toh(specifier[0]);
-	printf("edma_fdt_acquire chan_index=%d\n", chan_index);
 
 	return edma_channel_alloc(sc, EDMA_TYPE_DMA, chan_index, cb,
 	    cbarg);
@@ -493,18 +489,26 @@ edma_channel_alloc(struct edma_softc *sc, enum edma_type type,
 	KASSERT(cb != NULL);
 	KASSERT(cbarg != NULL);
 
+	/* allocate before the mutex since the mutex doesn't allow sleep*/
+	ch = kmem_alloc(sizeof(struct edma_channel), KM_SLEEP);
+	if (ch == NULL) return NULL;
+
 	mutex_enter(&sc->sc_lock);
-	if (!edma_bit_isset(sc->sc_dmamask, drq)) {
-		ch = &sc->sc_dma[drq];
-		KASSERT(ch->ch_callback == NULL);
-		KASSERT(ch->ch_index == drq);
-		ch->ch_callback = cb;
-		ch->ch_callbackarg = cbarg;
-		edma_bit_set(sc->sc_dmamask, drq);
+
+	if (sc->sc_dma[drq] != NULL) {
+		kmem_free(ch, sizeof(struct edma_channel));
+		goto done;
 	}
 
-	if (ch == NULL)
-		goto done;
+	ch->ch_sc = sc;
+	ch->ch_type = EDMA_TYPE_DMA;
+	ch->ch_index = drq;
+	ch->ch_callback = cb;
+	ch->ch_callbackarg = cbarg;
+	ch->ch_nparams = 0;
+	sc->sc_dma[drq] = ch;
+
+	edma_bit_set(sc->sc_dmamask, drq);
 
 	EDMA_WRITE(sc, EDMA_DRAE_REG(0), sc->sc_dmamask[0]);
 	EDMA_WRITE(sc, EDMA_DRAEH_REG(0), sc->sc_dmamask[1]);
@@ -539,9 +543,12 @@ edma_channel_free(struct edma_channel *ch)
 	} else {
 		EDMA_WRITE(sc, EDMA_IECRH_REG, __BIT(ch->ch_index - 32));
 	}
-	ch->ch_callback = NULL;
-	ch->ch_callbackarg = NULL;
+
+	sc->sc_dma[ch->ch_index] = NULL;
+	kmem_free(ch, sizeof(struct edma_channel));
+
 	edma_bit_clr(sc->sc_dmamask, ch->ch_index);
+
 	mutex_exit(&sc->sc_lock);
 }
 

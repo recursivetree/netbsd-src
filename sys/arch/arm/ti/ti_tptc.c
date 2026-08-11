@@ -65,11 +65,20 @@ ti_tptc_attach(device_t parent, device_t self, void *aux)
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 
+	if (of_hasprop(phandle, "power-domains")) {
+		/* clocks are configured through fdt_powerdomain */
+		if (fdtbus_powerdomain_enable(phandle) != 0) {
+			aprint_error(": couldn't enable powerdomain\n");
+			return;
+		}
+	} else {
+		/* clock are configured through the prcm system  */
+		if (ti_prcm_enable_hwmod(phandle, 0) != 0) {
+			aprint_error(": couldn't enable module\n");
+			return;
+		}
+	}
+
 	aprint_naive("\n");
 	aprint_normal(": EDMA Transfer Controller\n");
-
-        if (ti_prcm_enable_hwmod(phandle, 0) != 0) {
-                aprint_error_dev(self, "couldn't enable module\n");
-                return;
-        }
 }

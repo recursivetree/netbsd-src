@@ -127,6 +127,10 @@ file	arch/arm/ti/ti_tptc.c		ti_tptc
 attach	sdhc at fdt with ti_sdhc: ti_edma, ti_prcm
 file	arch/arm/ti/ti_sdhc.c		ti_sdhc
 
+device	am18xxsdmmc: sdmmcbus
+attach	am18xxsdmmc at fdt
+file	arch/arm/ti/am18xx_sdmmc.c	am18xxsdmmc
+
 # USB
 device	tiotg { } : fdt
 attach	tiotg at fdt with ti_otg

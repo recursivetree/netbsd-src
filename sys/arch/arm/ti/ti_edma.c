@@ -499,7 +499,7 @@ edma_channel_alloc(struct edma_softc *sc, enum edma_type type,
 	KASSERT(cb != NULL);
 	KASSERT(cbarg != NULL);
 
-	if (drq < sc->sc_num_channels) return NULL;
+	if (drq >= sc->sc_num_channels) return NULL;
 
 	/* allocate before the mutex since the mutex doesn't allow sleep */
 	ch = kmem_alloc(sizeof(struct edma_channel), KM_SLEEP);

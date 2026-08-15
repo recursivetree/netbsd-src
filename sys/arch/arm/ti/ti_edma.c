@@ -704,6 +704,9 @@ edma_transfer_enable(struct edma_channel *ch, uint16_t param_entry)
 		EDMA_WRITE(sc, EDMA_CCERRCLR_REG, ccerr);
 	}
 
+	EDMA_WRITE(sc, EDMA_ECR_REG + off, bit);
+	EDMA_WRITE(sc, EDMA_SECR_REG + off, bit);
+	EDMA_WRITE(sc, EDMA_EMCR_REG + off, bit);
 	EDMA_WRITE(sc, EDMA_EESR_REG + off, bit);
 }
 

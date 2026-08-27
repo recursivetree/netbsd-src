@@ -108,8 +108,8 @@ fdtbus_pinctrl_set_config_index(int phandle, u_int index)
 		if (error != 0)
 			return error;
 
-		pinctrl_data += pinctrl_cells;
-		len -= (pinctrl_cells * 4);
+		pinctrl_data += 1;
+		len -= 4;
 	}
 
 	return 0;

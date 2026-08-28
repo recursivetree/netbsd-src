@@ -106,6 +106,7 @@ pseudo-device 	tprof
 
 # GPIOs
 pinctrl* 	at fdt? pass 1		# generic pinctrl driver
+am18xxpupd*	at fdt?	pass 1		# am18xx pull up/pull down
 imx23pctl* 	at fdt?	pass 1		# imx23 pin control+gpio
 gpio* 		at gpiobus?
 

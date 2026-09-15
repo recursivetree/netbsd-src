@@ -118,6 +118,11 @@ device	tiiic: fdt_i2c, i2cbus, i2cexec
 attach	tiiic at fdt with ti_iic
 file	arch/arm/ti/ti_iic.c		ti_iic
 
+# SPI
+device	am18xxspi: fdt_spi
+attach	am18xxspi at fdt
+file	arch/arm/ti/am18xx_spi.c	am18xxspi
+
 # Ethernet
 device  cpsw: ether, ifnet, arp, mii, mii_phy
 attach  cpsw at fdt

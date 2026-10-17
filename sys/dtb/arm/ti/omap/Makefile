@@ -12,4 +12,8 @@ DTSMAKEVARS=	CONFIG_ARCH_OMAP3=y \
 DTSFILESCMD=	${MAKE} -C ${ARCHDTSDIR}/${DTSSUBDIR} ${DTSMAKEVARS} -v dtb-y
 DTS=		${DTSFILESCMD:sh}
 
+.if !empty(MACHINE_ARCH:Mearmv7*)
+DTS+=		bbb-netbsd-only.dts
+.endif
+
 .include <bsd.dtb.mk>

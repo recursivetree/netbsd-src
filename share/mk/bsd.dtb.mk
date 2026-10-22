@@ -37,6 +37,9 @@ DTSDIR+=$S/external/gpl2/dts/dist/arch/${_arch}/boot/dts
 .if defined(DTSSUBDIR)
 DTSDIR+=$S/external/gpl2/dts/dist/arch/${_arch}/boot/dts/${DTSSUBDIR}
 .endif
+.if defined(DTSSUBDIR)
+DTSDIR+=$S/external/gpl2/dts/downstream/arch/${_arch}/${DTSSUBDIR}
+.endif
 .endfor
 
 DTSPATH=${DTSINC} ${DTSDIR} ${.OBJDIR}/dts

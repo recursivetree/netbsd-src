@@ -12,4 +12,9 @@ DTSMAKEVARS=	CONFIG_ARCH_OMAP3=y \
 DTSFILESCMD=	${MAKE} -C ${ARCHDTSDIR}/${DTSSUBDIR} ${DTSMAKEVARS} -v dtb-y
 DTS=		${DTSFILESCMD:sh}
 
+# Extra .dts files from arch/arm/dts
+.if !empty(MACHINE_ARCH:Mearmv7*)
+DTS+=		am335x-netgate-sg1000.dts
+.endif
+
 .include <bsd.dtb.mk>
